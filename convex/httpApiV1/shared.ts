@@ -234,7 +234,12 @@ export async function requireApiTokenUserOrResponse(
 ) {
   try {
     const auth = await requireApiTokenUser(ctx, request);
-    return { ok: true as const, userId: auth.userId, user: auth.user as Doc<"users"> };
+    return {
+      ok: true as const,
+      userId: auth.userId,
+      user: auth.user as Doc<"users">,
+      apiTokenId: auth.apiTokenId,
+    };
   } catch (error) {
     return { ok: false as const, response: text(formatAuthFailure(error), 401, headers) };
   }

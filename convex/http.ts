@@ -35,6 +35,7 @@ import {
   createPublisherV1Http,
   publishPackageV1Http,
   publishAttemptsGetRouterV1Http,
+  recoverPackagePublishAttemptV1Http,
   publishSkillV1Http,
   resolveSkillVersionV1Http,
   searchSkillsV1Http,
@@ -291,6 +292,12 @@ http.route({
   pathPrefix: "/api/v1/publish/attempts/",
   method: "GET",
   handler: publishAttemptsGetRouterV1Http,
+});
+
+http.route({
+  pathPrefix: "/api/v1/publish/attempts/",
+  method: "POST",
+  handler: recoverPackagePublishAttemptV1Http,
 });
 
 http.route({

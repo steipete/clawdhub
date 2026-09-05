@@ -75,6 +75,10 @@ import { isOfficialPublisher } from "./lib/officialPublishers";
 import { verifyOpenClawPublishAuthorization } from "./lib/openClawPublishAuthorization";
 import { getPackageReleaseArtifactSha256 } from "./lib/packageArtifacts";
 import {
+  assertManualRecoveryFinalization,
+  manualPackageRecovery,
+} from "./lib/packagePublishRecovery";
+import {
   assertPackageVersion,
   derivePluginManifestSummary,
   ensurePluginNameMatchesPackage,
@@ -8340,10 +8344,15 @@ async function reverifyOpenClawAuthorizationEvidence(
 async function reverifyStagedOpenClawAuthorizationBeforeFinalize(
   ctx: ActionCtx,
   claim: {
+    attemptId: Id<"publishAttempts">;
     packageId?: Id<"packages">;
     packageFollowup: unknown;
   },
+  claimId: string,
 ) {
+  if (manualPackageRecovery(claim.packageFollowup)) {
+    return { manualRecoveryAttemptId: claim.attemptId, manualRecoveryClaimId: claimId };
+  }
   const followup = claim.packageFollowup as {
     packageName?: string;
     version?: string;
@@ -9462,7 +9471,7 @@ export const finalizePackagePublishAttemptInternal = internalAction({
     try {
       const trustedPublishAuthorization =
         claim.releaseId !== undefined
-          ? await reverifyStagedOpenClawAuthorizationBeforeFinalize(ctx, claim)
+          ? await reverifyStagedOpenClawAuthorizationBeforeFinalize(ctx, claim, claimId)
           : undefined;
       publishResult =
         claim.releaseId !== undefined
@@ -11304,6 +11313,8 @@ export const publishPendingReleaseInternal = internalMutation({
     trustedPublishTokenId: v.optional(v.id("packagePublishTokens")),
     trustedPublishInventoryDigest: v.optional(v.string()),
     trustedPublishAuthorizationVersion: v.optional(v.literal(2)),
+    manualRecoveryAttemptId: v.optional(v.id("publishAttempts")),
+    manualRecoveryClaimId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const release = await ctx.db.get(args.releaseId);
@@ -11327,6 +11338,16 @@ export const publishPendingReleaseInternal = internalMutation({
     }
 
     const metadata = pendingPackagePublicationMetadata(release);
+    const manualRecovery =
+      manualPackageRecovery(metadata) || args.manualRecoveryAttemptId
+        ? await assertManualRecoveryFinalization(
+            ctx,
+            pkg,
+            release,
+            args.manualRecoveryAttemptId,
+            args.manualRecoveryClaimId,
+          )
+        : undefined;
     // The pending row and finalizer must present the same v2 binding. Recheck
     // mutable revocation and publisher state in the transaction that goes public.
     if (
@@ -11416,6 +11437,9 @@ export const publishPendingReleaseInternal = internalMutation({
       pendingPublication: undefined,
       distTags: effectiveTags,
       verification: releaseVerification,
+      ...(manualRecovery
+        ? { publishActor: { kind: "user" as const, userId: manualRecovery.actorUserId } }
+        : {}),
     });
 
     await ctx.db.patch(pkg._id, {

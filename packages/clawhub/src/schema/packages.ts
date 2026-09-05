@@ -1000,6 +1000,27 @@ export const PackagePublicationStatusSchema = type(
 );
 export type PackagePublicationStatus = (typeof PackagePublicationStatusSchema)[inferred];
 
+export const ApiV1PackagePublishRecoveryRequestSchema = type({
+  manualOverrideReason: "string",
+});
+export type ApiV1PackagePublishRecoveryRequest =
+  (typeof ApiV1PackagePublishRecoveryRequestSchema)[inferred];
+
+export const ApiV1PackagePublishRecoveryResponseSchema = type({
+  ok: "true",
+  attemptId: "string",
+  recoveredFromAttemptId: "string",
+  packageId: "string",
+  releaseId: "string",
+  name: "string",
+  version: "string",
+  status: PackagePublishAttemptStatusSchema,
+  publicationStatus: PackagePublicationStatusSchema,
+  reused: "boolean",
+});
+export type ApiV1PackagePublishRecoveryResponse =
+  (typeof ApiV1PackagePublishRecoveryResponseSchema)[inferred];
+
 export const PackagePublishAttemptCheckSchema = type({
   status: '"pending"|"clean"|"blocked"|"failed"',
   summary: "string?",

@@ -7,6 +7,7 @@ import {
 } from "./httpApiV1/catalogFeedV1";
 import { contentRightsV1Handler } from "./httpApiV1/contentRightsV1";
 import { verifyDocsSessionV1Handler } from "./httpApiV1/docsSessionV1";
+import { recoverPackagePublishAttemptV1Handler } from "./httpApiV1/packagePublishRecoveryV1";
 import {
   exportPluginsV1Handler,
   listBundlePluginsV1Handler,
@@ -165,3 +166,5 @@ export const __handlers = {
   promotionsPostRouterV1Handler,
   promotionsFeedV1Handler,
 };
+
+export const recoverPackagePublishAttemptV1Http = httpAction(recoverPackagePublishAttemptV1Handler);

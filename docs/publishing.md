@@ -240,7 +240,24 @@ attempt succeeds. If that parent fails or is cancelled, the publish attempt
 fails permanently. A human recovery dispatch requires protected environment
 approval and a version 2 recovery receipt identifying the original authorized
 child. Recovery must use the same workflow ref and SHA, candidate, tooling, and
-package inventory; cancelled parents cannot recover.
+package inventory. That workflow route does not accept cancelled parents.
+
+Already-failed staged plugin attempts can instead be recovered under fresh
+publisher authority, without changing the old workflow or its outcome:
+
+```sh
+clawhub package recover <attempt-id> \
+  --manual-override-reason "Retry the retained release artifacts after workflow failure" \
+  --wait --json
+```
+
+This uses a normal ClawHub user token and current package publish access.
+It creates a successor with the same retained artifacts and version, runs new
+security checks, and preserves the failed attempt and original authorization
+as audit history. Current token or publisher-access revocation still blocks
+publication. It cannot override moderation or revive an active attempt.
+Without `--wait`, the result is explicitly pending. The equivalent HTTP route is
+[`POST /api/v1/publish/attempts/{id}/recover`](http-api.md#post-apiv1publishattemptsidrecover).
 
 Operators can preview orphaned package attempts, supplying an exact `version`,
 optional `slugPrefix` or `attemptIds`, and a `reason`:

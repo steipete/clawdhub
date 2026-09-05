@@ -25,6 +25,7 @@ import {
   cmdPackageReadiness,
   cmdPackPackage,
   cmdPublishPackage,
+  cmdRecoverPackage,
   cmdReportPackage,
   cmdSetPackageTrustedPublisher,
   cmdTransferPackage,
@@ -773,6 +774,21 @@ registerCommand(packageCmd, ["package", "publish"])
     await cmdPublishPackage(opts, source, options);
   });
 
+registerCommand(packageCmd, ["package", "recover"])
+  .description("Recover a failed staged OpenClaw release publication with fresh security checks")
+  .argument("<attempt-id>", "Failed publish attempt ID")
+  .requiredOption(
+    "--manual-override-reason <reason>",
+    "Audit reason for authorized publisher recovery",
+  )
+  .option("--wait", "Wait for security checks and definitive publication")
+  .option("--wait-timeout <seconds>", "Maximum seconds to wait for publication", Number)
+  .option("--json", "Output JSON")
+  .action(async (attemptId, options) => {
+    const opts = await resolveGlobalOpts();
+    await cmdRecoverPackage(opts, attemptId, options);
+  });
+
 const trustedPublisherCmd = registerCommandGroup(packageCmd, [
   "package",
   "trusted-publisher",
@@ -977,6 +993,7 @@ applyCommandHelpGroups(packageCmd, {
   pack: "Publishing:",
   publish: "Publishing:",
   "trusted-publisher": "Publishing:",
+  recover: "Publishing:",
   delete: "Moderation:",
   undelete: "Moderation:",
   transfer: "Moderation:",

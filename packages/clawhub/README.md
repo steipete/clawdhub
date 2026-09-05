@@ -164,6 +164,27 @@ clawhub package trusted-publisher delete @openclaw/example-plugin
 GitHub Actions environment in the OIDC claim must match. Tag-push real publishes
 still need `clawhub_token` unless the reusable workflow adds tag OIDC support.
 
+## Recover a staged publication
+
+An authorized package publisher can recover artifacts staged by a failed
+OpenClaw release workflow using the original attempt ID:
+
+```bash
+clawhub package recover <attempt-id> \
+  --manual-override-reason "Retry after the release workflow was interrupted" \
+  --wait --json
+```
+
+Recovery uses the retained artifact and version, preserves the failed attempt's
+audit history, and runs fresh security checks. It requires your normal ClawHub
+login and current publish access; it cannot override moderation or restore
+revoked access. The audit reason must contain 1 through 500 characters.
+
+Without `--wait`, the command reports the new attempt as pending. With `--wait`,
+it waits up to 30 minutes and succeeds only after publication; use
+`--wait-timeout <seconds>` to set another deadline. Repeating the same authorized
+recovery request returns its existing successor attempt.
+
 ## Maintainers
 
 The `clawhub` npm package is released separately from the ClawHub app deploy.

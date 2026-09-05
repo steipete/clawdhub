@@ -4,6 +4,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { action, internalAction, internalMutation, internalQuery } from "./functions";
 import { reusableAigAnalysis } from "./lib/aigAnalysis";
+import { manualPackageRecovery } from "./lib/packagePublishRecovery";
 import { finalizeSkillPublishAttempt } from "./lib/skillPublish";
 import { requestPublishAttemptDispatch } from "./publishAttemptDispatch";
 
@@ -176,7 +177,8 @@ function isTerminalFinalizationConflict(error: string | undefined) {
       error.includes(
         "Trusted publish authorization no longer matches the current trusted publisher",
       ) ||
-      error.includes("OpenClaw release parent terminal state"))
+      error.includes("OpenClaw release parent terminal state") ||
+      error.includes("Recovered package publication authorization"))
   );
 }
 
@@ -453,6 +455,17 @@ export const createPackagePublishAttemptInternal = internalMutation({
       };
     }
 
+    const release = await ctx.db.get(args.packageReleaseId);
+    if (
+      !release ||
+      release.packageId !== args.packageId ||
+      release.version !== args.version ||
+      release.publicationStatus !== "pending" ||
+      release.publishAttemptId !== undefined
+    )
+      throw new Error(
+        "Pending package release is unavailable or already bound to a publish attempt",
+      );
     const now = Date.now();
     const attemptId = await ctx.db.insert("publishAttempts", {
       kind: "package",
@@ -481,6 +494,8 @@ export const createPackagePublishAttemptInternal = internalMutation({
       updatedAt: now,
       expiresAt: now + THIRTY_DAYS_MS,
     });
+    // Bind the owning attempt before a scanner can fail or claim the release.
+    await ctx.db.patch(release._id, { publishAttemptId: attemptId });
     await requestPublishAttemptDispatch(ctx, attemptId);
 
     return { attemptId, status: "pending_checks" as const, result: undefined };
@@ -1027,7 +1042,12 @@ export const claimPendingPublishAttemptChecksInternal = internalMutation({
           existingClawscanAnalysis = reusableClawscanAnalysis(version.llmAnalysis);
           existingAigAnalysis = reusableAigAnalysis(version.aigAnalysis);
         }
-      } else if (attempt.kind === "package" && attempt.packageReleaseId) {
+      } else if (
+        attempt.kind === "package" &&
+        attempt.packageReleaseId &&
+        !manualPackageRecovery(attempt.packageFollowup)
+      ) {
+        // Recovery runs current checks anew; prior attempt results remain audit evidence.
         const release = await ctx.db.get(attempt.packageReleaseId);
         const releaseFingerprint = release?.clawManifestSummary
           ? release.clawpackSha256

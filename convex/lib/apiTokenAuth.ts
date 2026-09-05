@@ -39,7 +39,7 @@ export const BLOCKED_API_TOKEN_ACCOUNT_MESSAGE =
 export async function requireApiTokenUser(
   ctx: ActionCtx,
   request: Request,
-): Promise<TokenAuthResult> {
+): Promise<TokenAuthResult & { apiTokenId: Doc<"apiTokens">["_id"] }> {
   const header = request.headers.get("authorization") ?? request.headers.get("Authorization");
   const token = parseBearerToken(header);
   if (!token) throw new ConvexError(MISSING_API_TOKEN_MESSAGE);
@@ -71,7 +71,7 @@ export async function requireApiTokenUser(
   } catch {
     // Best-effort metadata; auth succeeded and should not fail on write contention.
   }
-  return { user, userId: user._id };
+  return { user, userId: user._id, apiTokenId: apiToken._id };
 }
 
 export async function getOptionalApiTokenUserId(
