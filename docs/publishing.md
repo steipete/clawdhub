@@ -257,7 +257,7 @@ security checks, and preserves the failed attempt and original authorization
 as audit history. Current token or publisher-access revocation still blocks
 publication. It cannot override moderation or revive an active attempt.
 Without `--wait`, the result is explicitly pending. The equivalent HTTP route is
-[`POST /api/v1/publish/attempts/{id}/recover`](http-api.md#post-apiv1publishattemptsidrecover).
+[`POST /api/v1/publish/attempts/{id}/recover`](http-api.md#post-%2Fapi%2Fv1%2Fpublish%2Fattempts%2F%7Bid%7D%2Frecover).
 
 Operators can preview orphaned package attempts, supplying an exact `version`,
 optional `slugPrefix` or `attemptIds`, and a `reason`:
@@ -299,7 +299,7 @@ Package transfers require admin access to both the current owner and the
 destination publisher, unless performed by a platform admin. Use `--to <owner>`
 to select an existing, active destination publisher. Scoped package names can
 transfer only to the publisher matching their scope. See
-[`package transfer`](./cli.md#package-transfer-name) for details.
+[`package transfer`](./cli.md#package-transfer-%3Cname%3E) for details.
 
 Skills use the separate [ownership transfer workflow](./cli.md#transfer).
 Transfers to another user normally require recipient acceptance.
