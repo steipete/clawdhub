@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -1500,7 +1500,7 @@ function bundledSkillRootsForJob(job: ClaimedJob) {
 
 export async function resolveBundledSkillSpectorScanInputs(workspace: string, job: ClaimedJob) {
   if (job.job.targetKind !== "packageRelease") return [];
-  const packageRoot = await resolveClawScanTarget(workspace, job);
+  const packageRoot = await resolveScanArtifactRoot(workspace, job);
   const artifactRoot = resolve(workspace, packageRoot);
   return bundledSkillRootsForJob(job)
     .map((rootPath) => {
@@ -2017,12 +2017,27 @@ export async function runClawScan(
   return mapped;
 }
 
-async function resolveClawScanTarget(workspace: string, job: ClaimedJob) {
+async function resolveScanArtifactRoot(workspace: string, job: ClaimedJob) {
   if (job.job.targetKind === "packageRelease") {
     const packageRoot = join(workspace, "artifact", "package");
     if (await fileExists(join(packageRoot, "package.json"))) return "./artifact/package";
   }
   return "./artifact";
+}
+
+export async function resolveClawScanTarget(workspace: string, job: ClaimedJob) {
+  const root = await resolveScanArtifactRoot(workspace, job);
+  const manifests = ["SKILL.md", "openclaw.plugin.json"];
+  const present = await Promise.all(
+    manifests.map(async (name) =>
+      (await lstat(join(workspace, root, name)).catch(() => null))?.isFile(),
+    ),
+  );
+  // ClawScan rejects dual-manifest directories. An explicit manifest selects the
+  // claimed kind while ClawScan still scans the entire dual-layout directory.
+  return present.every(Boolean)
+    ? `${root}/${manifests[job.job.targetKind === "packageRelease" ? 1 : 0]}`
+    : root;
 }
 
 export function scanHealthClassification(input: {

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -17,6 +17,7 @@ import {
   assertAigFilePathsHaveNoCompiledPython,
   type ClaimedJob,
   normalizeAigAnalysis,
+  resolveClawScanTarget,
   type StoredLlmAnalysis,
   writeArtifactWorkspace,
 } from "./run-codex-scan-worker";
@@ -417,18 +418,6 @@ function clawScanCommand() {
   return process.env.PREPUBLICATION_CLAWSCAN_COMMAND?.trim() || "clawscan";
 }
 
-async function fileExists(path: string) {
-  return Boolean(await stat(path).catch(() => null));
-}
-
-async function resolveNativeClawScanTarget(workspace: string, job: ClaimedJob) {
-  if (job.job.targetKind === "packageRelease") {
-    const packageRoot = join(workspace, "artifact", "package");
-    if (await fileExists(join(packageRoot, "package.json"))) return "./artifact/package";
-  }
-  return "./artifact";
-}
-
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   return value as Record<string, unknown>;
@@ -585,7 +574,7 @@ export async function runNativeClawScan(
   workspace: string,
 ): Promise<ClawScanResult> {
   const artifactPath = join(workspace, "clawscan-result.json");
-  const target = await resolveNativeClawScanTarget(workspace, job);
+  const target = await resolveClawScanTarget(workspace, job);
   if (job.job.targetKind !== "packageRelease") {
     assertAigFilePathsHaveNoCompiledPython(job.target.files?.map((file) => file.path) ?? []);
   }

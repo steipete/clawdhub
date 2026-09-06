@@ -474,6 +474,8 @@ JSON`,
     await mkdir(join(packageRoot, "skills", "alpha"), { recursive: true });
     await mkdir(join(packageRoot, "skills", "beta"), { recursive: true });
     await writeFile(join(packageRoot, "package.json"), "{}\n");
+    await writeFile(join(packageRoot, "openclaw.plugin.json"), '{"id":"demo-plugin"}\n');
+    await writeFile(join(packageRoot, "SKILL.md"), "# Bundled skill\n");
     await writeFile(join(packageRoot, "skills", "alpha", "SKILL.md"), "# alpha\n");
     await writeFile(join(packageRoot, "skills", "beta", "SKILL.md"), "# beta\n");
 
@@ -504,7 +506,8 @@ JSON`,
     const copiedFixture = join(workspace, "skillspector-fixture.json");
     await writeFakeClawScanCommand(
       fakeClawScan,
-      `out=""
+      `test "$1" = "./artifact/package/openclaw.plugin.json"
+out=""
 fixture=""
 while [[ $# -gt 0 ]]; do
   case "$1" in

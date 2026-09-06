@@ -445,6 +445,10 @@ See also: [acceptable-usage.md](./acceptable-usage.md) for the marketplace polic
   target kind and source through the same completion/failure contract. Skill
   versions and scan requests use the isolated `artifact` root; extracted
   ClawPack releases use `artifact/package`.
+- Both workers disambiguate directories containing `SKILL.md` and
+  `openclaw.plugin.json` by selecting the manifest matching the claimed target
+  kind. ClawScan still scans the full directory. Single-manifest directory
+  scans and the separate bundled-SkillSpector directory base remain unchanged.
 - OSS ClawScan is the only security-scan implementation. Every claimed target
   kind and source runs through the same ClawScan profile and completion/failure
   contract. ClawScan failures use the existing failure/retry lifecycle; there

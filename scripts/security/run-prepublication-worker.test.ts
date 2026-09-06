@@ -787,10 +787,11 @@ describe("pre-publication worker", () => {
     expect(payload.clawscan.summary).toContain("Python bytecode");
   });
 
-  it("runs native ClawScan as the required non-shadow security gate", async () => {
+  it("runs the required skill scan with an explicit manifest for a dual-layout artifact", async () => {
     const workspace = await tempDir();
     await mkdir(join(workspace, "artifact"), { recursive: true });
     await writeFile(join(workspace, "artifact", "SKILL.md"), "# Demo\n");
+    await writeFile(join(workspace, "artifact", "openclaw.plugin.json"), '{"id":"demo"}\n');
     const fakeClawScan = join(workspace, "fake-clawscan");
     await writeFile(
       fakeClawScan,
@@ -864,7 +865,7 @@ JSON
       );
 
       const args = await readFile(join(workspace, "clawscan-args.txt"), "utf8");
-      expect(args).toContain("./artifact");
+      expect(args.split("\n")[0]).toBe("./artifact/SKILL.md");
       expect(args).toContain("--profile\nclawhub");
       expect(args).toContain("--output\n");
       expect(args).toContain("--sandbox\noff");
@@ -893,18 +894,23 @@ JSON
     }
   });
 
-  it("accepts package scans when the skill-only A.I.G scanner is skipped", async () => {
-    const workspace = await tempDir();
-    await mkdir(join(workspace, "artifact", "package"), { recursive: true });
-    await writeFile(
-      join(workspace, "artifact", "package", "package.json"),
-      '{"name":"demo-plugin"}\n',
-    );
-    const fakeClawScan = join(workspace, "fake-clawscan");
-    await writeFile(
-      fakeClawScan,
-      `#!/usr/bin/env bash
+  it.each(["./artifact", "./artifact/package"])(
+    "scans the plugin manifest in dual-layout package %s",
+    async (packageRoot) => {
+      const workspace = await tempDir();
+      await mkdir(join(workspace, packageRoot), { recursive: true });
+      await writeFile(join(workspace, packageRoot, "package.json"), '{"name":"demo-plugin"}\n');
+      await writeFile(
+        join(workspace, packageRoot, "openclaw.plugin.json"),
+        '{"id":"demo-plugin"}\n',
+      );
+      await writeFile(join(workspace, packageRoot, "SKILL.md"), "# Bundled skill\n");
+      const fakeClawScan = join(workspace, "fake-clawscan");
+      await writeFile(
+        fakeClawScan,
+        `#!/usr/bin/env bash
 set -euo pipefail
+test "$1" = "${packageRoot}/openclaw.plugin.json"
 output=""
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--output" ]; then
@@ -917,44 +923,45 @@ cat > "$output" <<'JSON'
 {"schemaVersion":"clawscan-run-v1","profile":"clawhub","scanners":{"aig":{"status":"skipped"},"clawscan-static":{"status":"completed"},"skillspector":{"status":"completed"}},"judge":{"status":"completed","result":{"verdict":"benign","confidence":"high","summary":"Native ClawScan passed."}}}
 JSON
 `,
-    );
-    await chmod(fakeClawScan, 0o755);
-    const previousCommand = process.env.PREPUBLICATION_CLAWSCAN_COMMAND;
-    process.env.PREPUBLICATION_CLAWSCAN_COMMAND = fakeClawScan;
+      );
+      await chmod(fakeClawScan, 0o755);
+      const previousCommand = process.env.PREPUBLICATION_CLAWSCAN_COMMAND;
+      process.env.PREPUBLICATION_CLAWSCAN_COMMAND = fakeClawScan;
 
-    try {
-      await expect(
-        runNativeClawScan(
-          {
-            job: {
-              _id: String(attempt.attemptId),
-              attempts: 1,
-              hasMaliciousSignal: false,
-              leaseToken: attempt.claimId,
-              source: "pre-publication",
-              targetKind: "packageRelease",
-              waitForVtUntil: 0,
+      try {
+        await expect(
+          runNativeClawScan(
+            {
+              job: {
+                _id: String(attempt.attemptId),
+                attempts: 1,
+                hasMaliciousSignal: false,
+                leaseToken: attempt.claimId,
+                source: "pre-publication",
+                targetKind: "packageRelease",
+                waitForVtUntil: 0,
+              },
+              target: {},
             },
-            target: {},
+            workspace,
+          ),
+        ).resolves.toEqual({
+          analysis: expect.objectContaining({
+            status: "clean",
+            verdict: "benign",
+          }),
+          aigAnalysis: undefined,
+          check: {
+            status: "clean",
+            summary: "Native ClawScan passed.",
           },
-          workspace,
-        ),
-      ).resolves.toEqual({
-        analysis: expect.objectContaining({
-          status: "clean",
-          verdict: "benign",
-        }),
-        aigAnalysis: undefined,
-        check: {
-          status: "clean",
-          summary: "Native ClawScan passed.",
-        },
-      });
-    } finally {
-      if (previousCommand === undefined) delete process.env.PREPUBLICATION_CLAWSCAN_COMMAND;
-      else process.env.PREPUBLICATION_CLAWSCAN_COMMAND = previousCommand;
-    }
-  });
+        });
+      } finally {
+        if (previousCommand === undefined) delete process.env.PREPUBLICATION_CLAWSCAN_COMMAND;
+        else process.env.PREPUBLICATION_CLAWSCAN_COMMAND = previousCommand;
+      }
+    },
+  );
 
   it("fails closed when a completed skill scan omits a required scanner", async () => {
     const workspace = await tempDir();
