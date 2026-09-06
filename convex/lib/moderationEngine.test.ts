@@ -238,6 +238,7 @@ describe("moderationEngine", () => {
           path: "mainapp.py",
           content: [
             'OPENROUTER_KEY = "fixture_openrouter_secret_1234567890"',
+            'ORCAROUTER_KEY = "fixture_orcarouter_secret_1234567890"',
             'SUPABASE_KEY = "fixture_supabase_secret_1234567890"',
             'BEARER = "fixture_bearer_secret_1234567890"',
           ].join("\n"),
