@@ -211,20 +211,22 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
         headers["Content-Type"] = "application/json";
         body = JSON.stringify(args.body ?? {});
       }
-      const response = await fetchWithTimeout(deps, url, {
-        method: args.method,
-        headers,
-        body,
-      });
-      if (!response.ok && !isAcceptedStatus(response.status, args.acceptedStatuses)) {
-        throwHttpStatusError(
-          response.status,
-          await readResponseTextSafe(response),
-          response.headers,
-          deps.now,
-        );
-      }
-      return (await response.json()) as unknown;
+      return await fetchWithTimeout(
+        deps,
+        url,
+        { method: args.method, headers, body },
+        async (response) => {
+          if (!response.ok && !isAcceptedStatus(response.status, args.acceptedStatuses)) {
+            throwHttpStatusError(
+              response.status,
+              await readResponseTextSafe(response),
+              response.headers,
+              deps.now,
+            );
+          }
+          return (await response.json()) as unknown;
+        },
+      );
     }, args.retryCount);
     if (schema) return parseArk(schema, json, "API response");
     return json as T;
@@ -243,7 +245,7 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
 
       const headers: Record<string, string> = { Accept: "application/json" };
       if (args.token) headers.Authorization = `Bearer ${args.token}`;
-      const response = await fetchWithTimeout(
+      return await fetchWithTimeout(
         deps,
         url,
         {
@@ -251,17 +253,19 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
           headers,
           body: args.form,
         },
+        async (response) => {
+          if (!response.ok) {
+            throwHttpStatusError(
+              response.status,
+              await readResponseTextSafe(response),
+              response.headers,
+              deps.now,
+            );
+          }
+          return (await response.json()) as unknown;
+        },
         args.timeoutMs ?? UPLOAD_TIMEOUT_MS,
       );
-      if (!response.ok) {
-        throwHttpStatusError(
-          response.status,
-          await readResponseTextSafe(response),
-          response.headers,
-          deps.now,
-        );
-      }
-      return (await response.json()) as unknown;
     }, args.retryCount);
     if (schema) return parseArk(schema, json, "API response");
     return json as T;
@@ -276,12 +280,13 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
 
       const headers: Record<string, string> = { Accept: "text/plain" };
       if (args.token) headers.Authorization = `Bearer ${args.token}`;
-      const response = await fetchWithTimeout(deps, url, { method: "GET", headers });
-      const text = await response.text();
-      if (!response.ok) {
-        throwHttpStatusError(response.status, text, response.headers, deps.now);
-      }
-      return text;
+      return await fetchWithTimeout(deps, url, { method: "GET", headers }, async (response) => {
+        const text = await response.text();
+        if (!response.ok) {
+          throwHttpStatusError(response.status, text, response.headers, deps.now);
+        }
+        return text;
+      });
     });
   }
 
@@ -294,16 +299,17 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
 
       const headers: Record<string, string> = {};
       if (args.token) headers.Authorization = `Bearer ${args.token}`;
-      const response = await fetchWithTimeout(deps, url, { method: "GET", headers });
-      if (!response.ok) {
-        throwHttpStatusError(
-          response.status,
-          await readResponseTextSafe(response),
-          response.headers,
-          deps.now,
-        );
-      }
-      return new Uint8Array(await response.arrayBuffer());
+      return await fetchWithTimeout(deps, url, { method: "GET", headers }, async (response) => {
+        if (!response.ok) {
+          throwHttpStatusError(
+            response.status,
+            await readResponseTextSafe(response),
+            response.headers,
+            deps.now,
+          );
+        }
+        return new Uint8Array(await response.arrayBuffer());
+      });
     });
   }
 
@@ -319,7 +325,7 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
       const headers: Record<string, string> = {};
       if (args.contentType) headers["Content-Type"] = args.contentType;
       if (args.token) headers.Authorization = `Bearer ${args.token}`;
-      const response = await fetchWithTimeout(
+      return await fetchWithTimeout(
         deps,
         args.url,
         {
@@ -327,17 +333,19 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
           headers,
           body: bytesToArrayBuffer(args.bytes),
         },
+        async (response) => {
+          if (!response.ok) {
+            throwHttpStatusError(
+              response.status,
+              await readResponseTextSafe(response),
+              response.headers,
+              deps.now,
+            );
+          }
+          return (await response.json()) as unknown;
+        },
         UPLOAD_TIMEOUT_MS,
       );
-      if (!response.ok) {
-        throwHttpStatusError(
-          response.status,
-          await readResponseTextSafe(response),
-          response.headers,
-          deps.now,
-        );
-      }
-      return (await response.json()) as unknown;
     }, args.retryCount);
     if (schema) return parseArk(schema, json, "API response");
     return json as T;
@@ -355,16 +363,22 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
 
       const headers: Record<string, string> = {};
       if (args.token) headers.Authorization = `Bearer ${args.token}`;
-      const response = await fetchWithTimeout(deps, url.toString(), { method: "GET", headers });
-      if (!response.ok) {
-        throwHttpStatusError(
-          response.status,
-          await readResponseTextSafe(response),
-          response.headers,
-          deps.now,
-        );
-      }
-      return new Uint8Array(await response.arrayBuffer());
+      return await fetchWithTimeout(
+        deps,
+        url.toString(),
+        { method: "GET", headers },
+        async (response) => {
+          if (!response.ok) {
+            throwHttpStatusError(
+              response.status,
+              await readResponseTextSafe(response),
+              response.headers,
+              deps.now,
+            );
+          }
+          return new Uint8Array(await response.arrayBuffer());
+        },
+      );
     });
   }
 
@@ -478,21 +492,35 @@ function bytesToArrayBuffer(bytes: Uint8Array) {
   return copy.buffer;
 }
 
-async function fetchWithTimeout(
+async function fetchWithTimeout<T>(
   deps: Pick<HttpClientDeps, "fetchImpl" | "setTimeoutImpl" | "clearTimeoutImpl">,
   url: string,
   init: RequestInit,
+  read: (response: Response) => Promise<T>,
   timeoutMs = REQUEST_TIMEOUT_MS,
-): Promise<Response> {
+): Promise<T> {
   const controller = new AbortController();
   const timeoutSeconds = Math.ceil(timeoutMs / 1000);
-  const timeout = deps.setTimeoutImpl(
-    () => controller.abort(new Error(`Request timed out after ${timeoutSeconds}s`)),
-    timeoutMs,
-  );
+  let timeoutError: Error | null = null;
+  // "connect" = waiting on headers; "body" = reading/classifying after headers.
+  let phase: "connect" | "body" = "connect";
+  let timeoutPhase: "connect" | "body" | null = null;
+  const timeout = deps.setTimeoutImpl(() => {
+    timeoutError = new Error(`Request timed out after ${timeoutSeconds}s`);
+    timeoutPhase = phase;
+    controller.abort(timeoutError);
+  }, timeoutMs);
   try {
-    return await deps.fetchImpl(url, { ...init, signal: controller.signal });
+    // Keep abort armed through json/text/arrayBuffer; curl already uses --max-time.
+    const response = await deps.fetchImpl(url, { ...init, signal: controller.signal });
+    phase = "body";
+    return await read(response);
   } catch (error) {
+    // If the deadline fired during body read, prefer timeout over status errors
+    // (e.g. stalled 429/5xx body must not unlock Retry-After past the deadline).
+    if (timeoutError && (getHttpErrorStatus(error) === undefined || timeoutPhase === "body")) {
+      throw timeoutError;
+    }
     if (error instanceof Error) throw error;
     const message =
       typeof error === "object" && error !== null && "message" in error

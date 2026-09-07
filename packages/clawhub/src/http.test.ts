@@ -58,6 +58,37 @@ function createAbortingFetchMock() {
   });
 }
 
+function createStalledBodyFetch(options?: {
+  ok?: boolean;
+  status?: number;
+  headers?: Record<string, string>;
+}) {
+  return vi.fn(async (_url: string, init?: RequestInit) => {
+    const signal = init?.signal;
+    const hang = () =>
+      new Promise<never>((_resolve, reject) => {
+        if (!(signal instanceof AbortSignal)) return;
+        const abort = () => {
+          reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
+        };
+        if (signal.aborted) {
+          abort();
+          return;
+        }
+        signal.addEventListener("abort", abort, { once: true });
+      });
+    const headers = new Headers(options?.headers);
+    return {
+      ok: options?.ok ?? true,
+      status: options?.status ?? 200,
+      headers,
+      json: hang,
+      text: hang,
+      arrayBuffer: hang,
+    };
+  });
+}
+
 describe("detectHttpRuntime", () => {
   it("detects bun and node runtimes explicitly", () => {
     expect(detectHttpRuntime({ bun: "1.2.3" } as unknown as NodeJS.ProcessVersions)).toBe("bun");
@@ -566,5 +597,90 @@ describe("node http client", () => {
       }),
     ).rejects.toThrow(/timed out after 300s/i);
     expect(longTimeouts.setTimeoutImpl.mock.calls[0]?.[1]).toBe(300_000);
+  });
+
+  describe("stalled response body", () => {
+    function createShortTimeouts() {
+      const setTimeoutImpl = vi.fn((callback: () => void, _ms?: number) =>
+        setTimeout(callback, 50),
+      );
+      return {
+        setTimeoutImpl: setTimeoutImpl as unknown as typeof setTimeout,
+        clearTimeoutImpl: clearTimeout,
+      };
+    }
+
+    it(
+      "aborts apiRequest when json never completes after headers",
+      { timeout: 5_000 },
+      async () => {
+        const fetchImpl = createStalledBodyFetch();
+        const client = createNodeClient({
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+          ...createShortTimeouts(),
+        });
+        await expect(
+          client.apiRequest("https://example.com", {
+            method: "GET",
+            path: "/x",
+            retryCount: 0,
+          }),
+        ).rejects.toThrow(/Request timed out after 15s/);
+      },
+    );
+
+    it(
+      "aborts fetchText when the text body never completes after headers",
+      { timeout: 5_000 },
+      async () => {
+        const fetchImpl = createStalledBodyFetch();
+        const client = createNodeClient({
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+          ...createShortTimeouts(),
+        });
+        await expect(client.fetchText("https://example.com", { path: "/x" })).rejects.toThrow(
+          /Request timed out after 15s/,
+        );
+      },
+    );
+
+    it(
+      "aborts downloadZip when arrayBuffer never completes after headers",
+      { timeout: 5_000 },
+      async () => {
+        const fetchImpl = createStalledBodyFetch();
+        const client = createNodeClient({
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+          ...createShortTimeouts(),
+        });
+        await expect(client.downloadZip("https://example.com", { slug: "demo" })).rejects.toThrow(
+          /Request timed out after 15s/,
+        );
+      },
+    );
+
+    it(
+      "times out a stalled 429 body instead of retrying Retry-After",
+      { timeout: 5_000 },
+      async () => {
+        const fetchImpl = createStalledBodyFetch({
+          ok: false,
+          status: 429,
+          headers: { "Retry-After": "120" },
+        });
+        const client = createNodeClient({
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+          ...createShortTimeouts(),
+        });
+        await expect(
+          client.apiRequest("https://example.com", {
+            method: "GET",
+            path: "/x",
+            retryCount: 0,
+          }),
+        ).rejects.toThrow(/Request timed out after 15s/);
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+      },
+    );
   });
 });
