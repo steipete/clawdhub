@@ -278,7 +278,7 @@ describe("applyRateLimit headers", () => {
     });
   });
 
-  it("configures high-volume component-backed HTTP limits with 32 shards", async () => {
+  it("configures high-volume component-backed HTTP limits with 64 shards", async () => {
     vi.spyOn(Date, "now").mockReturnValue(2_600_000);
     const ctx = makeRateLimitCtx({
       ip: {
@@ -305,7 +305,7 @@ describe("applyRateLimit headers", () => {
         rate: RATE_LIMITS.download.ip,
         period: 60_000,
         start: 0,
-        shards: 32,
+        shards: 64,
       }),
     });
   });

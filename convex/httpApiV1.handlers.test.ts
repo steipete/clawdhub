@@ -2701,6 +2701,29 @@ describe("httpApiV1 handlers", () => {
     await expect(response.json()).resolves.toEqual({ items: [], nextCursor: "next-page" });
   });
 
+  it("GET /api/v1/skills uses 64 shards for concentrated public read traffic", async () => {
+    const runQuery = vi.fn().mockResolvedValue({ page: [], nextCursor: null });
+    const runMutation = vi.fn().mockResolvedValue(okRate());
+
+    const response = await __handlers.listSkillsV1Handler(
+      makeCtx({ runQuery, runMutation }),
+      new Request("https://example.com/api/v1/skills"),
+    );
+
+    expect(response.status).toBe(200);
+    expect(findRateLimitCallArgs(runMutation)).toMatchObject({
+      name: "readIp",
+      key: "ip:unknown:read",
+      config: {
+        kind: "fixed window",
+        rate: RATE_LIMITS.read.ip,
+        period: 60_000,
+        start: 0,
+        shards: 64,
+      },
+    });
+  });
+
   it("search rejects invalid mode", async () => {
     const runAction = vi.fn().mockResolvedValue([]);
     const runMutation = vi.fn().mockResolvedValue(okRate());
