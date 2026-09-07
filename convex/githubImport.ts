@@ -305,50 +305,6 @@ async function importGitHubSkillForUser(
     throw new ConvexError("The skill file must be selected");
   }
 
-  let totalBytes = 0;
-  const storedFiles: Array<{
-    path: string;
-    size: number;
-    storageId: Id<"_storage">;
-    sha256: string;
-    contentType?: string;
-  }> = [];
-
-  for (const path of selected.sort()) {
-    if (candidateRoot && !path.startsWith(candidateRoot)) {
-      throw new ConvexError("Selected file is outside the chosen skill folder");
-    }
-
-    const bytes = byPath.get(path);
-    if (!bytes) continue;
-    totalBytes += bytes.byteLength;
-    if (totalBytes > MAX_SELECTED_BYTES) throw new ConvexError("Selected files exceed 50MB limit");
-
-    const relPath = candidateRoot ? path.slice(candidateRoot.length) : path;
-    const sanitized = sanitizePath(relPath);
-    if (!sanitized) throw new ConvexError("Invalid file paths");
-
-    const sha256 = await sha256Hex(bytes);
-    const safeBytes = new Uint8Array(bytes);
-    let storageId: Id<"_storage">;
-    try {
-      storageId = await ctx.storage.store(
-        new Blob([safeBytes], { type: "application/octet-stream" }),
-      );
-    } catch (error) {
-      throw new ConvexError(buildStoreFailureMessage(sanitized, bytes.byteLength, error));
-    }
-    storedFiles.push({
-      path: sanitized,
-      size: bytes.byteLength,
-      storageId,
-      sha256,
-      contentType: "application/octet-stream",
-    });
-  }
-
-  if (storedFiles.length === 0) throw new ConvexError("No files selected");
-
   const slugBase = (args.slug ?? "").trim().toLowerCase();
   const displayName = (args.displayName ?? "").trim();
   const tags = (args.tags ?? ["latest"]).map((tag) => tag.trim()).filter(Boolean);
@@ -366,39 +322,89 @@ async function importGitHubSkillForUser(
     minimumRole: "publisher",
   })) as { publisherId: Id<"publishers"> };
 
-  const sourceProvenance = {
-    kind: "github" as const,
-    url: resolved.originalUrl,
-    repo: `${resolved.owner}/${resolved.repo}`,
-    ref: resolved.ref,
-    commit: resolved.commit,
-    path: candidate.path,
-    importedAt: Date.now(),
-  };
+  const storedFiles: Array<{
+    path: string;
+    size: number;
+    storageId: Id<"_storage">;
+    sha256: string;
+    contentType?: string;
+  }> = [];
 
-  let result: Awaited<ReturnType<typeof publishVersionForUser>>;
   try {
-    result = await publishVersionForUser(
-      ctx,
-      userId,
-      {
-        slug: slugBase,
-        displayName,
-        version,
-        changelog: "",
-        tags,
-        categories: args.categories,
-        topics: args.topics,
-        files: storedFiles,
-        source: sourceProvenance,
-      },
-      { ownerPublisherId: target.publisherId, sourceProvenance },
-    );
-  } catch (error) {
-    throw new ConvexError(buildPublishFailureMessage(error));
-  }
+    let totalBytes = 0;
+    for (const path of selected.sort()) {
+      if (candidateRoot && !path.startsWith(candidateRoot)) {
+        throw new ConvexError("Selected file is outside the chosen skill folder");
+      }
 
-  return { ok: true, slug: slugBase, version, ...result };
+      const bytes = byPath.get(path);
+      if (!bytes) continue;
+      totalBytes += bytes.byteLength;
+      if (totalBytes > MAX_SELECTED_BYTES)
+        throw new ConvexError("Selected files exceed 50MB limit");
+
+      const relPath = candidateRoot ? path.slice(candidateRoot.length) : path;
+      const sanitized = sanitizePath(relPath);
+      if (!sanitized) throw new ConvexError("Invalid file paths");
+
+      const sha256 = await sha256Hex(bytes);
+      const safeBytes = new Uint8Array(bytes);
+      let storageId: Id<"_storage">;
+      try {
+        storageId = await ctx.storage.store(
+          new Blob([safeBytes], { type: "application/octet-stream" }),
+        );
+      } catch (error) {
+        throw new ConvexError(buildStoreFailureMessage(sanitized, bytes.byteLength, error));
+      }
+      storedFiles.push({
+        path: sanitized,
+        size: bytes.byteLength,
+        storageId,
+        sha256,
+        contentType: "application/octet-stream",
+      });
+    }
+
+    if (storedFiles.length === 0) throw new ConvexError("No files selected");
+
+    const sourceProvenance = {
+      kind: "github" as const,
+      url: resolved.originalUrl,
+      repo: `${resolved.owner}/${resolved.repo}`,
+      ref: resolved.ref,
+      commit: resolved.commit,
+      path: candidate.path,
+      importedAt: Date.now(),
+    };
+
+    let result: Awaited<ReturnType<typeof publishVersionForUser>>;
+    try {
+      result = await publishVersionForUser(
+        ctx,
+        userId,
+        {
+          slug: slugBase,
+          displayName,
+          version,
+          changelog: "",
+          tags,
+          categories: args.categories,
+          topics: args.topics,
+          files: storedFiles,
+          source: sourceProvenance,
+        },
+        { ownerPublisherId: target.publisherId, sourceProvenance },
+      );
+    } catch (error) {
+      throw new ConvexError(buildPublishFailureMessage(error));
+    }
+
+    return { ok: true, slug: slugBase, version, ...result };
+  } catch (error) {
+    await Promise.allSettled(storedFiles.map((file) => ctx.storage.delete(file.storageId)));
+    throw error;
+  }
 }
 
 async function listOwnedPublicGitHubReposForUser(

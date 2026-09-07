@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { internal } from "./_generated/api";
 import { __test } from "./githubImport";
 import { buildGitHubZipForTests } from "./lib/githubImport";
+import { publishVersionForUser } from "./lib/skillPublish";
 
 vi.mock("./_generated/api", () => ({
   internal: {
@@ -13,8 +14,112 @@ vi.mock("./_generated/api", () => ({
     skills: {
       getSkillBySlugInternal: Symbol("getSkillBySlugInternal"),
     },
+    publishers: {
+      resolvePublishTargetForUserInternal: Symbol("resolvePublishTargetForUserInternal"),
+    },
   },
 }));
+
+vi.mock("./lib/skillPublish", () => ({
+  publishVersionForUser: vi.fn(),
+}));
+
+const IMPORT_COMMIT = "a".repeat(40);
+const IMPORT_OWNER = "vyctorbrzezowski";
+const IMPORT_REPO = "public-skill";
+
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.toString();
+  return input.url;
+}
+
+function buildOwnedImportZip(
+  entries: Record<string, string> = {
+    [`${IMPORT_REPO}/SKILL.md`]: "# Demo skill\n",
+    [`${IMPORT_REPO}/notes.md`]: "notes\n",
+  },
+) {
+  return buildGitHubZipForTests(entries);
+}
+
+function makeOwnedImportFetch(zip: Uint8Array) {
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = requestUrl(input);
+    if (url === `https://api.github.com/user/123`) {
+      return {
+        ok: true,
+        json: async () => ({
+          id: 123,
+          login: IMPORT_OWNER,
+          avatar_url: "https://avatars.githubusercontent.com/u/123?v=4",
+        }),
+      };
+    }
+    if (url === `https://api.github.com/repos/${IMPORT_OWNER}/${IMPORT_REPO}`) {
+      return {
+        ok: true,
+        json: async () => ({
+          name: IMPORT_REPO,
+          full_name: `${IMPORT_OWNER}/${IMPORT_REPO}`,
+          private: false,
+          visibility: "public",
+          owner: { id: 123, login: IMPORT_OWNER },
+          archived: false,
+          disabled: false,
+          fork: false,
+        }),
+      };
+    }
+    if (url === `https://api.github.com/repos/${IMPORT_OWNER}/${IMPORT_REPO}/commits/main`) {
+      return {
+        ok: true,
+        json: async () => ({ sha: IMPORT_COMMIT }),
+      };
+    }
+    if (url === `https://codeload.github.com/${IMPORT_OWNER}/${IMPORT_REPO}/zip/${IMPORT_COMMIT}`) {
+      return {
+        ok: true,
+        headers: { get: () => null },
+        arrayBuffer: async () => zip.buffer.slice(zip.byteOffset, zip.byteOffset + zip.byteLength),
+      };
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  });
+}
+
+function makeImportCtx(overrides?: {
+  store?: ReturnType<typeof vi.fn>;
+  delete?: ReturnType<typeof vi.fn>;
+}) {
+  let nextStorageId = 1;
+  const store = overrides?.store ?? vi.fn(async () => `storage:${nextStorageId++}` as const);
+  const del = overrides?.delete ?? vi.fn(async () => undefined);
+  return {
+    runQuery: vi.fn().mockResolvedValue("123"),
+    runMutation: vi.fn().mockResolvedValue({ publisherId: "publishers:1" }),
+    storage: {
+      store,
+      delete: del,
+    },
+  };
+}
+
+function makeImportArgs(overrides: Record<string, unknown> = {}) {
+  return {
+    url: `https://github.com/${IMPORT_OWNER}/${IMPORT_REPO}/tree/main`,
+    commit: IMPORT_COMMIT,
+    candidatePath: "",
+    selectedPaths: ["SKILL.md", "notes.md"],
+    slug: "public-skill",
+    ownerHandle: IMPORT_OWNER,
+    displayName: "Public Skill",
+    version: "1.0.0",
+    tags: ["latest"],
+    acceptLicenseTerms: true,
+    ...overrides,
+  };
+}
 
 const originalGitHubToken = process.env.GITHUB_TOKEN;
 const originalGitHubAppEnv = {
@@ -32,6 +137,7 @@ describe("githubImport", () => {
   });
 
   afterEach(() => {
+    vi.mocked(publishVersionForUser).mockReset();
     if (originalGitHubToken) {
       process.env.GITHUB_TOKEN = originalGitHubToken;
     } else {
@@ -727,5 +833,67 @@ describe("githubImport", () => {
       "https://codeload.github.com/vyctorbrzezowski/large-repo/zip/main",
       expect.objectContaining({ headers: expect.any(Object) }),
     );
+  });
+
+  it("validates import metadata before storing Convex blobs", async () => {
+    const ctx = makeImportCtx();
+    const fetchMock = makeOwnedImportFetch(buildOwnedImportZip());
+
+    await expect(
+      __test.importGitHubSkillForUser(
+        ctx as never,
+        "users:1" as never,
+        makeImportArgs({ version: "not-semver" }),
+        fetchMock as never,
+      ),
+    ).rejects.toThrow(/Version must be valid semver/);
+
+    expect(ctx.storage.store).not.toHaveBeenCalled();
+    expect(ctx.storage.delete).not.toHaveBeenCalled();
+    expect(publishVersionForUser).not.toHaveBeenCalled();
+  });
+
+  it("deletes stored blobs when publishVersionForUser fails after a successful store", async () => {
+    const ctx = makeImportCtx();
+    const fetchMock = makeOwnedImportFetch(buildOwnedImportZip());
+    vi.mocked(publishVersionForUser).mockRejectedValueOnce(new Error("slug exists"));
+
+    await expect(
+      __test.importGitHubSkillForUser(
+        ctx as never,
+        "users:1" as never,
+        makeImportArgs(),
+        fetchMock as never,
+      ),
+    ).rejects.toThrow(/Import failed during publish: slug exists/);
+
+    expect(ctx.storage.store).toHaveBeenCalledTimes(2);
+    expect(ctx.storage.delete).toHaveBeenCalledTimes(2);
+    expect(ctx.storage.delete).toHaveBeenCalledWith("storage:1");
+    expect(ctx.storage.delete).toHaveBeenCalledWith("storage:2");
+  });
+
+  it("deletes already-stored blobs when a later store call fails", async () => {
+    const store = vi
+      .fn()
+      .mockResolvedValueOnce("storage:1")
+      .mockRejectedValueOnce(new Error("disk full"));
+    const del = vi.fn(async () => undefined);
+    const ctx = makeImportCtx({ store, delete: del });
+    const fetchMock = makeOwnedImportFetch(buildOwnedImportZip());
+
+    await expect(
+      __test.importGitHubSkillForUser(
+        ctx as never,
+        "users:1" as never,
+        makeImportArgs(),
+        fetchMock as never,
+      ),
+    ).rejects.toThrow(/Failed to store file "notes.md" \(6 bytes\)\. disk full/);
+
+    expect(store).toHaveBeenCalledTimes(2);
+    expect(del).toHaveBeenCalledTimes(1);
+    expect(del).toHaveBeenCalledWith("storage:1");
+    expect(publishVersionForUser).not.toHaveBeenCalled();
   });
 });
