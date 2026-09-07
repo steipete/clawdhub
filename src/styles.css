@@ -2267,7 +2267,7 @@ code {
 }
 
 .aig-finding-copy strong {
-  color: var(--ink);
+  color: var(--oc-text-primary);
   font-weight: 650;
 }
 
@@ -14794,7 +14794,7 @@ a.skills-sh-security-audit-row:focus-visible {
 }
 
 .pa-run-status.is-canceled {
-  color: var(--ink-soft);
+  color: var(--oc-text-secondary);
 }
 
 .pa-run-status.is-canceled .pa-run-status-dot {
@@ -14914,14 +14914,14 @@ a.skills-sh-security-audit-row:focus-visible {
   align-items: flex-start;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--line);
+  border: 1px solid var(--oc-border-subtle);
   background: color-mix(in srgb, var(--panel) 70%, transparent);
-  color: var(--ink);
+  color: var(--oc-text-primary);
 }
 
 .pa-scan-canceled svg {
   flex: none;
-  color: var(--ink-soft);
+  color: var(--oc-text-secondary);
 }
 
 .pa-scan-canceled > div {
@@ -14932,7 +14932,7 @@ a.skills-sh-security-audit-row:focus-visible {
 
 .pa-scan-canceled span {
   overflow-wrap: anywhere;
-  color: var(--ink-soft);
+  color: var(--oc-text-secondary);
   font-size: var(--fs-sm);
 }
 
