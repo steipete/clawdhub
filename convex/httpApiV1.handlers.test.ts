@@ -2,6 +2,8 @@
 import type { RateLimitArgs, RateLimitReturns } from "@convex-dev/rate-limiter";
 import { gzipSync, strFromU8, unzipSync } from "fflate";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { parseArk } from "../packages/schema/src/ark";
+import { ApiV1SkillListResponseSchema } from "../packages/schema/src/schemas";
 import { api, internal } from "./_generated/api";
 import { RATE_LIMITS } from "./lib/httpRateLimit";
 import { MAX_PUBLISH_FILE_BYTES } from "./lib/publishLimits";
@@ -2857,6 +2859,7 @@ describe("httpApiV1 handlers", () => {
         return {
           page: [
             {
+              ownerHandle: "fixture-owner",
               skill: {
                 _id: "skills:1",
                 slug: "demo",
@@ -2889,8 +2892,80 @@ describe("httpApiV1 handlers", () => {
     );
     expect(response.status).toBe(200);
     const json = await response.json();
+    expect(json.items[0].ownerHandle).toBe("fixture-owner");
     expect(json.items[0].tags.latest).toBe("1.0.0");
     expect(json.items[0].topics).toEqual(["Automation", "Email"]);
+  });
+
+  it("preserves owner-qualified identities and nullable versions across cursor pages", async () => {
+    const fixtures = [
+      { ownerHandle: "fixture-owner-a", slug: "shared-fixture-slug", version: "1.2.3+fixture.01" },
+      { ownerHandle: "fixture-owner-b", slug: "shared-fixture-slug", version: "2.0.0" },
+      { ownerHandle: "fixture-owner-c", slug: "third-fixture", version: "3.0.0" },
+      { ownerHandle: "fixture-owner-d", slug: "no-public-version", version: null },
+    ] as const;
+    let pageIndex = 0;
+    const runQuery = vi.fn(async (_query: unknown, args: Record<string, unknown>) => {
+      if ("cursor" in args || "numItems" in args) {
+        const fixture = fixtures[pageIndex];
+        if (!fixture) return { page: [], nextCursor: null };
+        pageIndex += 1;
+        return {
+          page: [
+            {
+              ownerHandle: fixture.ownerHandle,
+              skill: {
+                _id: `skills:${pageIndex}`,
+                slug: fixture.slug,
+                displayName: `Fixture ${pageIndex}`,
+                summary: null,
+                tags: {},
+                stats: {},
+                createdAt: 1,
+                updatedAt: 2,
+              },
+              latestVersion: fixture.version
+                ? { version: fixture.version, createdAt: 3, changelog: "fixture" }
+                : null,
+            },
+          ],
+          nextCursor: pageIndex < fixtures.length ? `cursor-${pageIndex}` : null,
+        };
+      }
+      return [];
+    });
+    const runMutation = vi.fn().mockResolvedValue(okRate());
+    const identities = new Set<string>();
+    let cursor: string | null = null;
+
+    do {
+      const url = new URL("https://example.com/api/v1/skills?sort=updated&limit=1");
+      if (cursor) url.searchParams.set("cursor", cursor);
+      const response = await __handlers.listSkillsV1Handler(
+        makeCtx({ runQuery, runMutation }),
+        new Request(url),
+      );
+      expect(response.status).toBe(200);
+      const json = parseArk(
+        ApiV1SkillListResponseSchema,
+        await response.json(),
+        "Skill list response",
+      );
+      const item = json.items[0];
+      expect(item).toBeDefined();
+      identities.add(`${item!.ownerHandle}/${item!.slug}`);
+      cursor = json.nextCursor;
+    } while (cursor);
+
+    expect(pageIndex).toBe(4);
+    expect(identities).toEqual(
+      new Set([
+        "fixture-owner-a/shared-fixture-slug",
+        "fixture-owner-b/shared-fixture-slug",
+        "fixture-owner-c/third-fixture",
+        "fixture-owner-d/no-public-version",
+      ]),
+    );
   });
 
   it("lists skills with long description metadata and setup requirements", async () => {

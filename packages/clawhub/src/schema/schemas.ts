@@ -507,6 +507,7 @@ export const ApiV1SearchResponseSchema = type({
 
 export const ApiV1SkillListResponseSchema = type({
   items: type({
+    ownerHandle: "string?",
     slug: "string",
     displayName: "string",
     summary: "string|null?",
@@ -521,7 +522,9 @@ export const ApiV1SkillListResponseSchema = type({
       createdAt: "number",
       changelog: "string",
       license: '"MIT-0"|null?',
-    }).optional(),
+    })
+      .or("null")
+      .optional(),
     metadata: type({
       setup: type({
         key: "string",

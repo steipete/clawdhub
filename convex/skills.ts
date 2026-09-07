@@ -6175,7 +6175,7 @@ async function buildPublicSkillApiListEntryFromDigest(
   const publicSkill = toPublicSkill(hydratable);
   if (!publicSkill) return null;
   const ownerInfo = digestToOwnerInfo(digest);
-  if (!ownerInfo?.owner) return null;
+  if (!ownerInfo?.owner || !ownerInfo.ownerHandle) return null;
   const latestVersion = await resolveDigestLatestVersionForSkill(ctx, digest);
   if (isHostedSkillPendingPublicReview(hydratable) && !latestVersion) return null;
 
@@ -6192,6 +6192,7 @@ async function buildPublicSkillApiListEntryFromDigest(
       updatedAt: publicSkill.updatedAt,
       latestVersionId: publicSkill.latestVersionId,
     },
+    ownerHandle: ownerInfo.ownerHandle,
     latestVersion,
   };
 }

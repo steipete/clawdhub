@@ -1098,7 +1098,14 @@
       },
       "SkillListItem": {
         "type": "object",
+        "required": [
+          "ownerHandle",
+          "latestVersion"
+        ],
         "properties": {
+          "ownerHandle": {
+            "type": "string"
+          },
           "slug": {
             "type": "string"
           },

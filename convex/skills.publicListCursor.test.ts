@@ -1538,6 +1538,7 @@ describe("public skill list deterministic cursors", () => {
 
     expect(result.items).toHaveLength(1);
     expect(result.items[0]).toMatchObject({
+      ownerHandle: "owner",
       skill: {
         slug: "demo",
         topics: ["Calendar", "Official"],

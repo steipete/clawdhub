@@ -129,7 +129,7 @@ See [CLI login](./auth.md#cli-login) for the approval steps and expiry guidance.
   - `--limit <n>` (1-200, default: 25)
   - `--sort newest|updated|rating|downloads|trending` (default: newest). Legacy install sort aliases still work for compatibility.
   - `--json` (machine-readable output)
-- Output: `<slug>  v<version>  <age>  <summary>` (summary truncated to 50 chars).
+- Output: `<ownerHandle>/<slug>  v<version>  <age>  <summary>` (summary truncated to 50 chars).
 
 ### `inspect @owner/slug`
 

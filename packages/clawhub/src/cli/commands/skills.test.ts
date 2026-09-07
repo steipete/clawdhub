@@ -166,12 +166,27 @@ describe("explore helpers", () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
     const summary = "a".repeat(60);
     const line = formatExploreLine({
+      ownerHandle: "openclaw",
       slug: "weather",
       summary,
       updatedAt: now - 2 * 60 * 60 * 1000,
       latestVersion: null,
     });
-    expect(line).toBe(`weather  v?  2h ago  ${"a".repeat(49)}…`);
+    expect(line).toBe(`openclaw/weather  v?  2h ago  ${"a".repeat(49)}…`);
+    nowSpy.mockRestore();
+  });
+
+  it("formats legacy registry results without an owner handle", () => {
+    const now = 4 * 60 * 60 * 1000;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+
+    expect(
+      formatExploreLine({
+        slug: "weather",
+        updatedAt: now - 2 * 60 * 60 * 1000,
+        latestVersion: { version: "1.0.0" },
+      }),
+    ).toBe("weather  v1.0.0  2h ago");
     nowSpy.mockRestore();
   });
 });
@@ -202,6 +217,7 @@ describe("cmdExplore", () => {
     const now = 10 * 60 * 1000;
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
     const item = {
+      ownerHandle: "openclaw",
       slug: "gog",
       summary: "Google Workspace CLI for Gmail, Calendar, Drive and more.",
       updatedAt: now - 90 * 1000,

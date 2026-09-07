@@ -168,6 +168,8 @@ Notes:
 - `recommended` uses engagement and recency signals.
 - `trending` ranks by installs in the last 7 days (telemetry-based).
 - `createdAt` is stable for new-skill crawls; `updated` changes when existing skills are republished.
+- Each item is identified by the owner-qualified pair `ownerHandle/slug`; slugs are not globally unique across publishers.
+- `latestVersion` is always present. It is `null` when the skill has no public version.
 - Prefix listing is complete across pages: keep following `nextCursor` until it is `null`.
 - When `nonSuspiciousOnly=true`, cursor-based sorts may return fewer than `limit` items on a page because suspicious skills are filtered after page retrieval.
 - Use `nextCursor` to continue pagination when present. A short page does not by itself mean end-of-results.
@@ -178,6 +180,7 @@ Response:
 {
   "items": [
     {
+      "ownerHandle": "steipete",
       "slug": "gifgrep",
       "displayName": "GifGrep",
       "summary": "…",

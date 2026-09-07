@@ -156,6 +156,7 @@ async function readRequestBodyWithinLimit(request: Request, maxBytes: number) {
 
 type ListSkillsResult = {
   items: Array<{
+    ownerHandle: string | null;
     skill: {
       _id: Id<"skills">;
       slug: string;
@@ -1550,6 +1551,7 @@ export async function listSkillsV1Handler(ctx: ActionCtx, request: Request) {
   );
 
   const items = result.items.map((item, idx) => ({
+    ownerHandle: item.ownerHandle,
     slug: item.skill.slug,
     displayName: item.skill.displayName,
     summary: item.skill.summary ?? null,

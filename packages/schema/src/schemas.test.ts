@@ -15,6 +15,7 @@ import {
   ApiSearchResponseSchema,
   ApiV1SkillHardDeleteResponseSchema,
   ApiV1SkillInstallResolveResponseSchema,
+  ApiV1SkillListResponseSchema,
   ApiV1SkillRescanResponseSchema,
   ApiV1SearchResponseSchema,
   ApiV1SkillVerifyResponseSchema,
@@ -26,6 +27,34 @@ import {
 } from "./schemas";
 
 describe("clawhub-schema", () => {
+  it("parses owner-qualified skill list items without a public version", () => {
+    const response = parseArk(
+      ApiV1SkillListResponseSchema,
+      {
+        items: [
+          {
+            ownerHandle: "fixture-owner",
+            slug: "shared-fixture-slug",
+            displayName: "Fixture skill",
+            summary: null,
+            description: null,
+            tags: {},
+            stats: {},
+            createdAt: 1,
+            updatedAt: 2,
+            latestVersion: null,
+            metadata: null,
+          },
+        ],
+        nextCursor: null,
+      },
+      "Skill list response",
+    );
+
+    expect(response.items[0]?.ownerHandle).toBe("fixture-owner");
+    expect(response.items[0]?.latestVersion).toBeNull();
+  });
+
   it("parses package hard-delete responses", () => {
     const result = parseArk(
       ApiV1PackageHardDeleteResponseSchema,

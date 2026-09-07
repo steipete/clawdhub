@@ -325,6 +325,7 @@ export declare const ApiV1SearchResponseSchema: import("arktype/internal/variant
 }, {}>;
 export declare const ApiV1SkillListResponseSchema: import("arktype/internal/variants/object.ts").ObjectType<{
     items: {
+        ownerHandle: string;
         slug: string;
         displayName: string;
         summary?: string | null | undefined;
@@ -334,12 +335,12 @@ export declare const ApiV1SkillListResponseSchema: import("arktype/internal/vari
         stats: unknown;
         createdAt: number;
         updatedAt: number;
-        latestVersion?: {
+        latestVersion: {
             version: string;
             createdAt: number;
             changelog: string;
             license?: "MIT-0" | null | undefined;
-        } | undefined;
+        } | null;
         metadata?: {
             setup: {
                 key: string;
