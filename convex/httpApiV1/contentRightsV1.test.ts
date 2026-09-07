@@ -1,9 +1,35 @@
 /* @vitest-environment node */
 
-import { describe, expect, it, vi } from "vitest";
-import { proxyHermitContentRightsRequest } from "./contentRightsV1";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  HERMIT_CONTENT_RIGHTS_FETCH_TIMEOUT_MS,
+  proxyHermitContentRightsRequest,
+} from "./contentRightsV1";
+
+function hangUntilAborted(_input: unknown, init?: RequestInit) {
+  return new Promise<Response>((_resolve, reject) => {
+    const signal = init?.signal;
+    if (!signal) return;
+    signal.addEventListener(
+      "abort",
+      () => {
+        reject(
+          signal.reason instanceof Error
+            ? signal.reason
+            : new DOMException("The operation was aborted.", "AbortError"),
+        );
+      },
+      { once: true },
+    );
+  });
+}
 
 describe("ClawHub content rights Hermit proxy", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it("reads a case using the existing shared ClawHub-Hermit token", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ case: { caseId: "CHR-000007" }, files: [], events: [] }), {
@@ -27,6 +53,7 @@ describe("ClawHub content rights Hermit proxy", () => {
       {
         method: "GET",
         headers: { Authorization: "Bearer shared-token" },
+        signal: expect.any(AbortSignal),
       },
     );
   });
@@ -63,6 +90,7 @@ describe("ClawHub content rights Hermit proxy", () => {
     expect(response.status).toBe(201);
     const forwarded = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(forwarded.method).toBe("POST");
+    expect(forwarded.signal).toBeInstanceOf(AbortSignal);
     expect(forwarded.body).toBeInstanceOf(FormData);
     const forwardedBody = forwarded.body as FormData;
     expect(forwardedBody.get("actor")).toBe("users:admin");
@@ -82,5 +110,47 @@ describe("ClawHub content rights Hermit proxy", () => {
     );
 
     expect(response.status).toBe(503);
+  });
+
+  it("returns 502 when a hung Hermit GET exceeds the fetch timeout", async () => {
+    vi.useFakeTimers();
+    // Node's AbortSignal.timeout is native and ignores fake timers. Drive abort via setTimeout.
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(() => {
+        controller.abort(
+          new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+        );
+      }, ms);
+      return controller.signal;
+    });
+    let usedSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_input: unknown, init?: RequestInit) => {
+      usedSignal = init?.signal ?? undefined;
+      return hangUntilAborted(_input, init);
+    });
+
+    const pending = proxyHermitContentRightsRequest(
+      new Request("https://clawhub.ai/api/v1/content-rights/CHR-000007"),
+      "users:admin",
+      {
+        baseUrl: "https://forms.openclaw.ai",
+        serviceToken: "shared-token",
+        fetch: fetchMock,
+      },
+    );
+
+    await Promise.resolve();
+    expect(usedSignal).toBeInstanceOf(AbortSignal);
+    expect(usedSignal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(HERMIT_CONTENT_RIGHTS_FETCH_TIMEOUT_MS - 1);
+    expect(usedSignal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const response = await pending;
+    expect(response.status).toBe(502);
+    expect(usedSignal?.aborted).toBe(true);
+    expect(await response.text()).toBe("Hermit content rights service unavailable");
   });
 });
