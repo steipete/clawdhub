@@ -8964,21 +8964,6 @@ async function publishPackageImpl(
           files: await withSkillMarkdownTextsForManifestSummary(ctx, files),
         });
 
-  const legacyZipStorageId =
-    payload.artifact?.kind === "npm-pack"
-      ? undefined
-      : await ctx.storage.store(
-          new Blob(
-            [
-              legacyZipBytes.buffer.slice(
-                legacyZipBytes.byteOffset,
-                legacyZipBytes.byteOffset + legacyZipBytes.byteLength,
-              ) as ArrayBuffer,
-            ],
-            { type: "application/zip" },
-          ),
-        );
-
   const packageInsertArgs = {
     actorUserId,
     ownerUserId,
@@ -9004,8 +8989,7 @@ async function publishPackageImpl(
     integritySha256,
     sha256hash: legacyZipSha256,
     artifactKind: payload.artifact?.kind ?? "legacy-zip",
-    clawpackStorageId:
-      (payload.artifact?.storageId as Id<"_storage"> | undefined) ?? legacyZipStorageId,
+    clawpackStorageId: payload.artifact?.storageId as Id<"_storage"> | undefined,
     clawpackSha256: payload.artifact?.sha256 ?? legacyZipSha256,
     clawpackSize: payload.artifact?.size ?? legacyZipBytes.byteLength,
     clawpackFormat: payload.artifact?.format,
@@ -9025,6 +9009,38 @@ async function publishPackageImpl(
     source: effectiveSource,
     trustedPublishTokenId: auth.kind === "github-actions" ? auth.publishToken._id : undefined,
     trustedPublishInventoryDigest: auth.kind === "github-actions" ? inventoryDigest : undefined,
+  };
+  // Store the zip only when a release row will own it; delete if insert fails first.
+  const storeLegacyZipIfNeeded = async () => {
+    if (payload.artifact?.kind === "npm-pack" || packageInsertArgs.clawpackStorageId) {
+      return undefined;
+    }
+    const legacyZipStorageId = await ctx.storage.store(
+      new Blob(
+        [
+          legacyZipBytes.buffer.slice(
+            legacyZipBytes.byteOffset,
+            legacyZipBytes.byteOffset + legacyZipBytes.byteLength,
+          ) as ArrayBuffer,
+        ],
+        { type: "application/zip" },
+      ),
+    );
+    packageInsertArgs.clawpackStorageId = legacyZipStorageId;
+    return legacyZipStorageId;
+  };
+  const insertReleaseOwningLegacyZip = async <TResult>(
+    insert: () => Promise<TResult>,
+  ): Promise<TResult> => {
+    const legacyZipStorageId = await storeLegacyZipIfNeeded();
+    try {
+      return await insert();
+    } catch (error) {
+      if (legacyZipStorageId) {
+        await ctx.storage.delete(legacyZipStorageId).catch(() => undefined);
+      }
+      throw error;
+    }
   };
   const publishedArtifactSha256 = family === "claw" ? packageInsertArgs.clawpackSha256 : undefined;
   const attemptArtifactFingerprint = publishedArtifactSha256 ?? integritySha256;
@@ -9164,16 +9180,18 @@ async function publishPackageImpl(
       version,
       inventoryDigest,
     });
-    const pendingResult = await runMutationRef<{
-      ok: true;
-      packageId: Id<"packages">;
-      releaseId: Id<"packageReleases">;
-      publicationStatus?: "pending" | "published";
-      createdNewParent?: boolean;
-    }>(ctx, internalRefs.packages.insertReleaseInternal, {
-      ...packageInsertArgs,
-      publicationStatus: "pending",
-    });
+    const pendingResult = await insertReleaseOwningLegacyZip(() =>
+      runMutationRef<{
+        ok: true;
+        packageId: Id<"packages">;
+        releaseId: Id<"packageReleases">;
+        publicationStatus?: "pending" | "published";
+        createdNewParent?: boolean;
+      }>(ctx, internalRefs.packages.insertReleaseInternal, {
+        ...packageInsertArgs,
+        publicationStatus: "pending",
+      }),
+    );
 
     const staged = await runMutationRef<{
       attemptId: Id<"publishAttempts">;
@@ -9283,11 +9301,13 @@ async function publishPackageImpl(
     version,
     inventoryDigest,
   });
-  const publishResult = await runMutationRef<{
-    ok: true;
-    packageId: Id<"packages">;
-    releaseId: Id<"packageReleases">;
-  }>(ctx, internalRefs.packages.insertReleaseInternal, packageInsertArgs);
+  const publishResult = await insertReleaseOwningLegacyZip(() =>
+    runMutationRef<{
+      ok: true;
+      packageId: Id<"packages">;
+      releaseId: Id<"packageReleases">;
+    }>(ctx, internalRefs.packages.insertReleaseInternal, packageInsertArgs),
+  );
   if (inspectorResult?.warnings.length) {
     const insertFindingsResult = await runMutationRef<{
       ok: true;
