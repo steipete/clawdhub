@@ -54,7 +54,7 @@
     "yaml": "2.9.0"
   },
   "devDependencies": {
-    "@types/node": "26.2.0",
+    "@types/node": "26.4.1",
     "@typescript/native": "npm:typescript@7.0.2",
     "typescript": "6.0.3"
   },
