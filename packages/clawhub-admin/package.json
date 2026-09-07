@@ -33,13 +33,13 @@
     "arktype": "2.2.3",
     "commander": "15.0.0",
     "fflate": "0.8.3",
-    "ignore": "7.0.6",
+    "ignore": "7.0.8",
     "json5": "2.2.3",
     "mime": "4.1.0",
     "ora": "9.4.1",
-    "p-retry": "8.0.0",
+    "p-retry": "8.0.1",
     "semver": "7.8.5",
-    "undici": "7.29.0"
+    "undici": "7.29.1"
   },
   "devDependencies": {
     "@types/node": "26.2.0",
