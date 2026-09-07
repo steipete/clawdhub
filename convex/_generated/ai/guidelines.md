@@ -1,6 +1,6 @@
 # Convex guidelines
 
-These guidelines target Convex `^1.41.0`.
+These guidelines target Convex `^1.44.0`.
 
 ## Function guidelines
 
@@ -44,6 +44,7 @@ export default mutation({
 ```
 
 - `v.object(...)` validators compose: `.pick("a", "b")`, `.omit("c")`, `.partial()`, and `.extend({ d: v.string() })` derive new object validators from an existing one - define a shape once and derive variants instead of duplicating fields. Use an object validator's `.fields` to supply function `args`.
+- `schema.doc("tableName")` (import `schema` from `./schema`) returns the validator for a whole stored document: the table's validator with `_id` and `_creationTime` added, to every member for union tables. Use it when an `args` or `returns` validator needs a complete document instead of re-declaring the fields or the system fields; `docValidator("tableName", tableDefinition)` from `convex/server` builds the same from a bare table definition.
 - Below is an example of a schema with validators that codify a discriminated union type:
 
 ```typescript
@@ -257,7 +258,7 @@ export const exampleQuery = query({
 ```
 
 - Be strict with types, particularly around id's of documents. For example, if a function takes in an id for a document in the 'users' table, take in `Id<'users'>` rather than `string`.
-- For typed app environment variables, declare them in `convex/convex.config.ts` with `defineApp({ env: { MY_KEY: v.optional(v.string()) } })` and read them with `env` from `./_generated/server` instead of `process.env`.
+- For typed app environment variables, declare them in `convex/convex.config.ts` with `defineApp({ env: { MY_KEY: v.optional(v.string()) } })` and read them with `env` from `./_generated/server` instead of `process.env`. The platform-provided `CONVEX_SITE_URL` and `CONVEX_CLOUD_URL` are already on `env` as strings; never declare them in `convex.config.ts` (redeclaring them fails the deploy or breaks the generated `env` type).
 
 ## Full text search guidelines
 
