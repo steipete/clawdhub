@@ -19,9 +19,11 @@ import {
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
-import { internalAction, internalMutation, internalQuery } from "./_generated/server";
-import type { QueryCtx } from "./_generated/server";
+import { internalAction, internalQuery } from "./_generated/server";
+import type { ActionCtx, QueryCtx } from "./_generated/server";
+import { internalMutation } from "./functions";
 import { isSkillHighlighted } from "./lib/badges";
+import { projectCatalogFeedOpenClaw } from "./lib/catalogFeedOpenClaw";
 import { sha256Hex } from "./lib/clawpack";
 import { experimentalClawsEnabled } from "./lib/experimentalClaws";
 import { isPublicSkillDoc } from "./lib/globalStats";
@@ -29,6 +31,7 @@ import { isOfficialPublisher } from "./lib/officialPublishers";
 import { getPackageReleaseArtifactSha256 } from "./lib/packageArtifacts";
 import { isPackageBlockedFromPublic, resolvePackageReleaseScanStatus } from "./lib/packageSecurity";
 import { getOwnerPublisher } from "./lib/publishers";
+import { MAX_PUBLISH_FILE_BYTES } from "./lib/publishLimits";
 import { isSecurityScanStatusCompletedNonBlocked } from "./lib/securityScanPolicy";
 import {
   getPublicSkillVersionDownloadBlock,
@@ -40,10 +43,18 @@ import { isHostedSkillPresentationIconPath, stripPresentationEmoji } from "./lib
 const CATALOG_FEED_DESCRIPTION = "Official OpenClaw plugins published on ClawHub.";
 const CATALOG_FEED_PAGE_SIZE = 100;
 const MAX_CATALOG_FEED_ENTRIES = 1000;
+// One publication is one Convex document (1 MiB); leave room for row metadata.
+const MAX_CATALOG_FEED_PAYLOAD_BYTES = 900 * 1024;
 const CATALOG_FEED_FAMILIES = ["code-plugin", "bundle-plugin"] as const;
 const CATALOG_CLAW_FAMILY = "claw" as const;
 
 type CatalogQueryCtx = Pick<QueryCtx, "db">;
+type CatalogEntryProjection<T = CatalogFeedPluginEntry | ExperimentalClawFeedEntry> = {
+  entry: T;
+  manifest?: Pick<Doc<"packageReleases">["files"][number], "storageId" | "size" | "sha256"> & {
+    runtimeId: string;
+  };
+};
 type CatalogFeedPublicationResult = {
   publicationId: string;
   feedId: string;
@@ -98,8 +109,75 @@ const catalogFeedEntryFields = {
     ),
   }),
 };
+const providerAuthChoiceValidator = v.object({
+  method: v.string(),
+  choiceId: v.string(),
+  choiceLabel: v.string(),
+  choiceHint: v.optional(v.string()),
+  assistantPriority: v.optional(v.number()),
+  assistantVisibility: v.optional(v.union(v.literal("visible"), v.literal("manual-only"))),
+  groupId: v.optional(v.string()),
+  groupLabel: v.optional(v.string()),
+  groupHint: v.optional(v.string()),
+  optionKey: v.optional(v.string()),
+  cliFlag: v.optional(v.string()),
+  cliOption: v.optional(v.string()),
+  cliDescription: v.optional(v.string()),
+  deprecatedChoiceIds: v.optional(v.array(v.string())),
+  onboardingScopes: v.optional(
+    v.array(
+      v.union(
+        v.literal("text-inference"),
+        v.literal("image-generation"),
+        v.literal("music-generation"),
+      ),
+    ),
+  ),
+  appGuidedSecret: v.optional(v.boolean()),
+  appGuidedAuth: v.optional(v.union(v.literal("oauth"), v.literal("device-code"))),
+  appGuidedActionLabel: v.optional(v.string()),
+  onboardingFeatured: v.optional(v.boolean()),
+  icon: v.optional(v.string()),
+  website: v.optional(v.string()),
+});
+const catalogFeedOpenClawValidator = v.object({
+  plugin: v.object({ id: v.string(), label: v.optional(v.string()) }),
+  providers: v.array(
+    v.object({
+      id: v.string(),
+      envVars: v.optional(v.array(v.string())),
+      authChoices: v.optional(v.array(providerAuthChoiceValidator)),
+    }),
+  ),
+  modelCatalog: v.optional(
+    v.object({
+      providers: v.record(
+        v.string(),
+        v.object({
+          defaultModel: v.optional(v.string()),
+          models: v.array(
+            v.object({
+              id: v.string(),
+              name: v.optional(v.string()),
+              input: v.optional(
+                v.array(v.union(v.literal("text"), v.literal("image"), v.literal("document"))),
+              ),
+              reasoning: v.optional(v.boolean()),
+              contextWindow: v.optional(v.number()),
+              maxTokens: v.optional(v.number()),
+            }),
+          ),
+        }),
+      ),
+    }),
+  ),
+});
 const catalogFeedEntryValidator = v.union(
-  v.object({ type: v.literal("plugin"), ...catalogFeedEntryFields }),
+  v.object({
+    type: v.literal("plugin"),
+    ...catalogFeedEntryFields,
+    openclaw: v.optional(catalogFeedOpenClawValidator),
+  }),
   v.object({ type: v.literal("skill"), ...catalogFeedEntryFields }),
 );
 const clawFeedEntryValidator = v.object({
@@ -137,13 +215,11 @@ const clawFeedEntryValidator = v.object({
 async function buildEntry(
   ctx: CatalogQueryCtx,
   pkg: Doc<"packages">,
-): Promise<CatalogFeedPluginEntry | ExperimentalClawFeedEntry | null> {
+): Promise<CatalogEntryProjection | null> {
   if (pkg.softDeletedAt || pkg.channel !== "official" || !pkg.latestReleaseId) return null;
   const release = await ctx.db.get(pkg.latestReleaseId);
   if (!release || release.packageId !== pkg._id || release.softDeletedAt) return null;
 
-  // Keep ClawHub on RFC 19's canonical feed entry shape. OpenClaw's staged
-  // consumer must land its legacy-catalog adapter before this URL is enabled.
   const scanStatus = resolvePackageReleaseScanStatus(release);
   if (isPackageBlockedFromPublic(scanStatus)) return null;
   const artifactSha256 = getPackageReleaseArtifactSha256(release);
@@ -172,16 +248,60 @@ async function buildEntry(
   if (pkg.family === "claw") {
     if (!release.clawManifestSummary) return null;
     return {
-      type: "claw",
+      entry: {
+        type: "claw",
+        id,
+        title,
+        version,
+        state: "available",
+        publisher: {
+          id: publisherId,
+          trust: "official",
+        },
+        clawManifestSummary: release.clawManifestSummary,
+        install: {
+          candidates: [
+            {
+              sourceRef: CATALOG_FEED_SOURCE_REF,
+              package: packageName,
+              version,
+              integrity: `sha256:${artifactSha256}`,
+            },
+          ],
+        },
+      } satisfies ExperimentalClawFeedEntry,
+    };
+  }
+
+  const manifestFile =
+    pkg.family === "code-plugin" && release.runtimeId
+      ? release.files.find((file) => file.path.toLowerCase() === "openclaw.plugin.json")
+      : undefined;
+  return {
+    ...(manifestFile && release.runtimeId
+      ? {
+          manifest: {
+            runtimeId: release.runtimeId,
+            storageId: manifestFile.storageId,
+            size: manifestFile.size,
+            sha256: manifestFile.sha256,
+          },
+        }
+      : {}),
+    entry: {
+      type: "plugin",
       id,
       title,
+      ...(description ? { description } : {}),
+      ...(icon ? { icon } : {}),
       version,
       state: "available",
+      featured: Boolean(highlighted),
+      ...(highlighted ? { featuredAt: highlighted.at } : {}),
       publisher: {
         id: publisherId,
         trust: "official",
       },
-      clawManifestSummary: release.clawManifestSummary,
       install: {
         candidates: [
           {
@@ -192,32 +312,6 @@ async function buildEntry(
           },
         ],
       },
-    } satisfies ExperimentalClawFeedEntry;
-  }
-
-  return {
-    type: "plugin",
-    id,
-    title,
-    ...(description ? { description } : {}),
-    ...(icon ? { icon } : {}),
-    version,
-    state: "available",
-    featured: Boolean(highlighted),
-    ...(highlighted ? { featuredAt: highlighted.at } : {}),
-    publisher: {
-      id: publisherId,
-      trust: "official",
-    },
-    install: {
-      candidates: [
-        {
-          sourceRef: CATALOG_FEED_SOURCE_REF,
-          package: packageName,
-          version,
-          integrity: `sha256:${artifactSha256}`,
-        },
-      ],
     },
   };
 }
@@ -226,7 +320,7 @@ async function listFamilyEntries(
   ctx: CatalogQueryCtx,
   family: (typeof CATALOG_FEED_FAMILIES)[number] | typeof CATALOG_CLAW_FAMILY,
 ) {
-  const entries: Array<CatalogFeedPluginEntry | ExperimentalClawFeedEntry> = [];
+  const entries: CatalogEntryProjection[] = [];
   let cursor: string | null = null;
 
   while (true) {
@@ -418,10 +512,11 @@ export const listOfficialEntries = internalQuery({
   },
   handler: async (ctx, args) => {
     const entries = await listFamilyEntries(ctx, args.family);
-    if (entries.some((entry) => entry.type !== "plugin")) {
-      throw new Error("Plugin feed projection returned a mismatched entry type");
-    }
-    return entries as CatalogFeedPluginEntry[];
+    return entries.map(({ entry, manifest }): CatalogEntryProjection<CatalogFeedPluginEntry> => {
+      if (entry.type !== "plugin")
+        throw new Error("Plugin feed projection returned a mismatched entry type");
+      return { entry, ...(manifest ? { manifest } : {}) };
+    });
   },
 });
 
@@ -430,10 +525,11 @@ export const listOfficialClawEntries = internalQuery({
   handler: async (ctx) => {
     if (!experimentalClawsEnabled()) return [];
     const entries = await listFamilyEntries(ctx, CATALOG_CLAW_FAMILY);
-    if (entries.some((entry) => entry.type !== "claw")) {
-      throw new Error("Claw feed projection returned a mismatched entry type");
-    }
-    return entries as ExperimentalClawFeedEntry[];
+    return entries.map(({ entry }) => {
+      if (entry.type !== "claw")
+        throw new Error("Claw feed projection returned a mismatched entry type");
+      return entry;
+    });
   },
 });
 
@@ -473,6 +569,16 @@ export const listOfficialSkillEntries = internalQuery({
   },
 });
 
+async function hashCatalogFeedPayload(payload: string): Promise<string> {
+  const bytes = new TextEncoder().encode(payload);
+  if (bytes.byteLength > MAX_CATALOG_FEED_PAYLOAD_BYTES) {
+    throw new Error(
+      `Catalog feed payload exceeds ${MAX_CATALOG_FEED_PAYLOAD_BYTES} bytes; reduce feed metadata`,
+    );
+  }
+  return sha256Hex(bytes);
+}
+
 export const storePublication = internalMutation({
   args: {
     feedId: v.union(v.literal(CATALOG_FEED_ID), v.literal(CATALOG_SKILLS_FEED_ID)),
@@ -500,7 +606,7 @@ export const storePublication = internalMutation({
       description: args.description,
       entries: args.entries,
     });
-    const payloadSha256 = await sha256Hex(new TextEncoder().encode(payload));
+    const payloadSha256 = await hashCatalogFeedPayload(payload);
     const publishedAt = Date.now();
     const publication = {
       feedId: args.feedId,
@@ -547,7 +653,7 @@ export const storeClawPublication = internalMutation({
       description: EXPERIMENTAL_CLAW_FEED_DESCRIPTION,
       entries: args.entries,
     });
-    const payloadSha256 = await sha256Hex(new TextEncoder().encode(payload));
+    const payloadSha256 = await hashCatalogFeedPayload(payload);
     const publishedAt = Date.now();
     const publication = {
       feedId: EXPERIMENTAL_CLAW_FEED_ID,
@@ -572,6 +678,29 @@ export const storeClawPublication = internalMutation({
   },
 });
 
+async function hydratePluginEntry(
+  ctx: Pick<ActionCtx, "storage">,
+  { entry, manifest }: CatalogEntryProjection<CatalogFeedPluginEntry>,
+): Promise<CatalogFeedPluginEntry> {
+  if (!manifest) return entry;
+  if (manifest.size > MAX_PUBLISH_FILE_BYTES)
+    throw new Error(`Catalog manifest too large: ${entry.id}`);
+  const blob = await ctx.storage.get(manifest.storageId);
+  if (!blob || blob.size !== manifest.size)
+    throw new Error(`Catalog manifest size mismatch: ${entry.id}`);
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  if ((await sha256Hex(bytes)) !== manifest.sha256)
+    throw new Error(`Catalog manifest digest mismatch: ${entry.id}`);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    throw new Error(`Catalog manifest is not valid JSON: ${entry.id}`);
+  }
+  const openclaw = projectCatalogFeedOpenClaw(raw, manifest.runtimeId, entry.title);
+  return { ...entry, ...(openclaw ? { openclaw } : {}) };
+}
+
 export const publish = internalAction({
   args: {
     expiresAt: v.string(),
@@ -580,10 +709,15 @@ export const publish = internalAction({
     const generatedAt = new Date().toISOString();
     const familyEntries: CatalogFeedEntry[][] = await Promise.all(
       CATALOG_FEED_FAMILIES.map(async (family) => {
-        const entries: CatalogFeedEntry[] = await ctx.runQuery(
+        const projections: CatalogEntryProjection<CatalogFeedPluginEntry>[] = await ctx.runQuery(
           internal.catalogFeed.listOfficialEntries,
           { family },
         );
+        const entries: CatalogFeedPluginEntry[] = [];
+        // Read immutable manifests one at a time, not the lossy extracted JSON.
+        // Keep storage ids private and bind every projection to the release hash.
+        for (const projection of projections)
+          entries.push(await hydratePluginEntry(ctx, projection));
         return entries;
       }),
     );

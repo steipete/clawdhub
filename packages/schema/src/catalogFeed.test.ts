@@ -224,6 +224,107 @@ describe("catalog feed schema", () => {
     expect(parseCatalogFeed(makeFeed()).entries[0]).not.toHaveProperty("icon");
   });
 
+  it("round-trips provider setup and model previews with canonical object ordering", () => {
+    const openclaw = {
+      plugin: { id: "demo", label: "Demo" },
+      providers: [
+        {
+          id: "demo",
+          envVars: ["DEMO_API_KEY"],
+          authChoices: [
+            {
+              method: "api-key",
+              choiceId: "demo-api-key",
+              choiceLabel: "Demo API key",
+              appGuidedSecret: true,
+              onboardingScopes: ["text-inference"],
+            },
+          ],
+        },
+      ],
+      modelCatalog: {
+        providers: {
+          demo: { defaultModel: "demo-latest", models: [{ id: "demo-latest", name: "Latest" }] },
+        },
+      },
+    };
+    const withMetadata = (metadata: unknown) =>
+      parseCatalogFeed({
+        ...makeFeed(),
+        entries: [{ ...makeFeed().entries[0], openclaw: metadata }],
+      });
+    const feed = withMetadata(openclaw);
+    const reordered = withMetadata({
+      modelCatalog: {
+        providers: {
+          demo: { models: [{ name: "Latest", id: "demo-latest" }], defaultModel: "demo-latest" },
+        },
+      },
+      providers: openclaw.providers.map((provider) => ({
+        authChoices: provider.authChoices.map((choice) => ({
+          onboardingScopes: choice.onboardingScopes,
+          appGuidedSecret: choice.appGuidedSecret,
+          choiceLabel: choice.choiceLabel,
+          choiceId: choice.choiceId,
+          method: choice.method,
+        })),
+        envVars: provider.envVars,
+        id: provider.id,
+      })),
+      plugin: { label: "Demo", id: "demo" },
+    });
+    const serialized = serializeCatalogFeed(feed);
+
+    expect(serializeCatalogFeed(reordered)).toBe(serialized);
+    expect(parseCatalogFeed(JSON.parse(serialized)).entries[0]).toMatchObject({ openclaw });
+    expect(parseCatalogFeed(JSON.parse(serialized)).schemaVersion).toBe(1);
+  });
+
+  it.each([
+    {
+      key: "appGuidedDiscovery",
+      extra: {
+        providers: [
+          {
+            id: "demo",
+            authChoices: [
+              {
+                method: "api-key",
+                choiceId: "demo",
+                choiceLabel: "Demo",
+                appGuidedDiscovery: true,
+              },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      key: "providerEndpoints",
+      extra: { providerEndpoints: { demo: { baseUrl: "https://example.test" } } },
+    },
+    {
+      key: "compat",
+      extra: {
+        modelCatalog: {
+          providers: { demo: { models: [{ id: "demo", compat: { supportsStore: true } }] } },
+        },
+      },
+    },
+  ])("rejects runtime-only $key in the public feed", ({ key, extra }) => {
+    expect(() =>
+      parseCatalogFeed({
+        ...makeFeed(),
+        entries: [
+          {
+            ...makeFeed().entries[0],
+            openclaw: { plugin: { id: "demo" }, providers: [{ id: "demo" }], ...extra },
+          },
+        ],
+      }),
+    ).toThrow(key);
+  });
+
   it("preserves public GitHub source identity on skill candidates", () => {
     const feed = makeFeed({
       id: CATALOG_SKILLS_FEED_ID,

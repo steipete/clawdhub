@@ -42,11 +42,61 @@ an artifact digest, and releases blocked by ClawHub security or moderation
 state. The feed contains no registry URLs, credentials, source tokens, or
 bootstrap trust keys.
 
-The feed intentionally emits RFC 19's canonical entry shape rather than
-OpenClaw's current legacy bundled-catalog entries. The staged OpenClaw hosted
-feeds stack must add its RFC-entry adapter before `registry.openclaw.ai` is
-enabled as the default client feed; publishing this snapshot is otherwise
-safe, but pre-adapter clients will fall back to their bundled catalog.
+The feed emits RFC 19's canonical entry shape. OpenClaw's hosted-feed adapter
+also accepts optional `entry.openclaw` metadata. The strict schema in this
+repository is a private workspace package used by the producer, not a published
+ClawHub client SDK; the ClawHub CLI does not consume these feeds. Changes still
+need compatibility checks against the OpenClaw reader before publication.
+
+### Provider setup and model previews
+
+Eligible code-plugin entries may include `openclaw.plugin`, `openclaw.providers`,
+and `openclaw.modelCatalog.providers`. They are projections of the selected
+release's immutable `openclaw.plugin.json`, not another hand-maintained provider
+registry. The release runtime id must match the manifest id, and only provider
+ids declared by that manifest are eligible. Bundle plugins and packages without
+usable provider declarations keep their ordinary install entry.
+
+Provider metadata carries declared environment variable **names**, explicit auth
+choices, and their bounded labels, grouping, CLI hints, onboarding scopes, and
+manual app-setup presentation. It never contains environment values, credentials,
+executable discovery flags such as `appGuidedDiscovery`, or runtime settings.
+The manifest's install coordinates are not copied: the outer `install.candidates`
+entry remains the sole exact package/version/artifact-digest binding. Discovery
+does not install or execute the plugin.
+
+Model previews carry only `id`, `name`, `input` (`text`, `image`, or `document`),
+`reasoning`, `contextWindow`, `maxTokens`, and a `defaultModel` present in that
+preview. They are a display subset for pre-install discovery, not a complete
+model catalog or an instruction to populate runtime model configuration. API
+types, endpoints, headers, costs, compatibility flags, utility defaults, and
+runtime status are excluded. Full model behavior remains owned by the installed
+plugin and OpenClaw's existing model catalog.
+
+Each plugin projects at most 32 providers and 16 auth choices per provider.
+Provider and choice ids are deduplicated and sorted before applying those caps;
+declared environment-variable priority is preserved. The complete `openclaw`
+metadata for an entry is capped at 64 KiB of UTF-8 JSON. Setup metadata is admitted
+first, skipping whole providers or auth choices that do not fit without changing
+retained fields; model previews use only the remaining budget. Each provider preview has
+at most 64 models, and all model previews for an entry together fit in 16 KiB of
+UTF-8 JSON. Models are selected deterministically with the declared default
+first, then model id; providers without room for a model are omitted from the
+preview, not from setup discovery. Ordinary strings are at most 256 characters,
+URL display fields are credential-free HTTPS URLs of at most 2048 characters,
+including after canonical URL encoding, and string lists contain at most 16 items.
+
+The indexed eligibility query passes a private manifest storage reference with
+the exact release's runtime id, file size, and SHA-256 to the publication action.
+The action reads files sequentially within the existing 10 MiB published-file
+limit, verifies size and digest, and parses the original JSON before projection.
+Missing files, digest/size mismatches, or invalid JSON fail publication visibly
+and leave the previous snapshot intact. Storage ids are never published.
+
+The extracted metadata is intentionally not a fallback: its depth truncation and
+object-key rewriting can lose or misattribute model declarations. The exact
+manifest also remains available through the existing version-pinned package-file
+route with its stored file hash; the catalog does not duplicate that full blob.
 
 The skills feed uses the same envelope and `/v1/feeds/skills` route. It emits
 `type: "skill"` entries with `@<publisher>/<slug>` ids and ClawHub install
@@ -105,7 +155,11 @@ outside the promotion's declared provider.
 indexed package/skill queries and stores one current publication row per feed
 in `catalogFeedPublications`.
 Keeping one row per feed avoids an unbounded publication log while preserving
-the sequence and exact payload needed for validators.
+the sequence and exact payload needed for validators. Before writing a plugin,
+skill, or experimental Claw publication, the publisher rejects payloads larger
+than 900 KiB, leaving room for metadata inside Convex's 1 MiB document limit.
+An oversized snapshot fails visibly and leaves the previous publication intact;
+it is never partially written or silently stripped of install candidates.
 
 The `Publish Hosted Catalog Feed` workflow refreshes the snapshot every six
 hours and can be run manually. It requires the existing `Production` environment

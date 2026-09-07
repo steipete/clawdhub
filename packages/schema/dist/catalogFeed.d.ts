@@ -23,6 +23,55 @@ export declare const CatalogFeedInstallCandidateSchema: import("arktype/internal
     } | undefined;
 }, {}>;
 export type CatalogFeedInstallCandidate = (typeof CatalogFeedInstallCandidateSchema)[inferred];
+export declare const CatalogFeedOpenClawSchema: import("arktype/internal/variants/object.ts").ObjectType<{
+    plugin: {
+        id: string;
+        label?: string | undefined;
+    };
+    providers: {
+        id: string;
+        envVars?: string[] | undefined;
+        authChoices?: {
+            method: string;
+            choiceId: string;
+            choiceLabel: string;
+            choiceHint?: string | undefined;
+            assistantPriority?: number | undefined;
+            assistantVisibility?: "manual-only" | "visible" | undefined;
+            groupId?: string | undefined;
+            groupLabel?: string | undefined;
+            groupHint?: string | undefined;
+            optionKey?: string | undefined;
+            cliFlag?: string | undefined;
+            cliOption?: string | undefined;
+            cliDescription?: string | undefined;
+            deprecatedChoiceIds?: string[] | undefined;
+            onboardingScopes?: ("image-generation" | "music-generation" | "text-inference")[] | undefined;
+            appGuidedSecret?: boolean | undefined;
+            appGuidedAuth?: "device-code" | "oauth" | undefined;
+            appGuidedActionLabel?: string | undefined;
+            onboardingFeatured?: boolean | undefined;
+            icon?: string | undefined;
+            website?: string | undefined;
+        }[] | undefined;
+    }[];
+    modelCatalog?: {
+        providers: {
+            [x: string]: {
+                defaultModel?: string | undefined;
+                models: {
+                    id: string;
+                    name?: string | undefined;
+                    input?: ("document" | "image" | "text")[] | undefined;
+                    reasoning?: boolean | undefined;
+                    contextWindow?: number | undefined;
+                    maxTokens?: number | undefined;
+                }[];
+            };
+        };
+    } | undefined;
+}, {}>;
+export type CatalogFeedOpenClaw = (typeof CatalogFeedOpenClawSchema)[inferred];
 export declare const CatalogFeedPluginEntrySchema: import("arktype/internal/variants/object.ts").ObjectType<{
     id: string;
     title: string;
@@ -51,6 +100,54 @@ export declare const CatalogFeedPluginEntrySchema: import("arktype/internal/vari
         }[];
     };
     type: "plugin";
+    openclaw?: {
+        plugin: {
+            id: string;
+            label?: string | undefined;
+        };
+        providers: {
+            id: string;
+            envVars?: string[] | undefined;
+            authChoices?: {
+                method: string;
+                choiceId: string;
+                choiceLabel: string;
+                choiceHint?: string | undefined;
+                assistantPriority?: number | undefined;
+                assistantVisibility?: "manual-only" | "visible" | undefined;
+                groupId?: string | undefined;
+                groupLabel?: string | undefined;
+                groupHint?: string | undefined;
+                optionKey?: string | undefined;
+                cliFlag?: string | undefined;
+                cliOption?: string | undefined;
+                cliDescription?: string | undefined;
+                deprecatedChoiceIds?: string[] | undefined;
+                onboardingScopes?: ("image-generation" | "music-generation" | "text-inference")[] | undefined;
+                appGuidedSecret?: boolean | undefined;
+                appGuidedAuth?: "device-code" | "oauth" | undefined;
+                appGuidedActionLabel?: string | undefined;
+                onboardingFeatured?: boolean | undefined;
+                icon?: string | undefined;
+                website?: string | undefined;
+            }[] | undefined;
+        }[];
+        modelCatalog?: {
+            providers: {
+                [x: string]: {
+                    defaultModel?: string | undefined;
+                    models: {
+                        id: string;
+                        name?: string | undefined;
+                        input?: ("document" | "image" | "text")[] | undefined;
+                        reasoning?: boolean | undefined;
+                        contextWindow?: number | undefined;
+                        maxTokens?: number | undefined;
+                    }[];
+                };
+            };
+        } | undefined;
+    } | undefined;
 }, {}>;
 export type CatalogFeedPluginEntry = (typeof CatalogFeedPluginEntrySchema)[inferred];
 export declare const CatalogFeedSkillEntrySchema: import("arktype/internal/variants/object.ts").ObjectType<{
@@ -111,6 +208,54 @@ export declare const CatalogFeedEntrySchema: import("arktype/internal/variants/o
         }[];
     };
     type: "plugin";
+    openclaw?: {
+        plugin: {
+            id: string;
+            label?: string | undefined;
+        };
+        providers: {
+            id: string;
+            envVars?: string[] | undefined;
+            authChoices?: {
+                method: string;
+                choiceId: string;
+                choiceLabel: string;
+                choiceHint?: string | undefined;
+                assistantPriority?: number | undefined;
+                assistantVisibility?: "manual-only" | "visible" | undefined;
+                groupId?: string | undefined;
+                groupLabel?: string | undefined;
+                groupHint?: string | undefined;
+                optionKey?: string | undefined;
+                cliFlag?: string | undefined;
+                cliOption?: string | undefined;
+                cliDescription?: string | undefined;
+                deprecatedChoiceIds?: string[] | undefined;
+                onboardingScopes?: ("image-generation" | "music-generation" | "text-inference")[] | undefined;
+                appGuidedSecret?: boolean | undefined;
+                appGuidedAuth?: "device-code" | "oauth" | undefined;
+                appGuidedActionLabel?: string | undefined;
+                onboardingFeatured?: boolean | undefined;
+                icon?: string | undefined;
+                website?: string | undefined;
+            }[] | undefined;
+        }[];
+        modelCatalog?: {
+            providers: {
+                [x: string]: {
+                    defaultModel?: string | undefined;
+                    models: {
+                        id: string;
+                        name?: string | undefined;
+                        input?: ("document" | "image" | "text")[] | undefined;
+                        reasoning?: boolean | undefined;
+                        contextWindow?: number | undefined;
+                        maxTokens?: number | undefined;
+                    }[];
+                };
+            };
+        } | undefined;
+    } | undefined;
 } | {
     id: string;
     title: string;
@@ -176,6 +321,54 @@ export declare const CatalogFeedSchema: import("arktype/internal/variants/object
             }[];
         };
         type: "plugin";
+        openclaw?: {
+            plugin: {
+                id: string;
+                label?: string | undefined;
+            };
+            providers: {
+                id: string;
+                envVars?: string[] | undefined;
+                authChoices?: {
+                    method: string;
+                    choiceId: string;
+                    choiceLabel: string;
+                    choiceHint?: string | undefined;
+                    assistantPriority?: number | undefined;
+                    assistantVisibility?: "manual-only" | "visible" | undefined;
+                    groupId?: string | undefined;
+                    groupLabel?: string | undefined;
+                    groupHint?: string | undefined;
+                    optionKey?: string | undefined;
+                    cliFlag?: string | undefined;
+                    cliOption?: string | undefined;
+                    cliDescription?: string | undefined;
+                    deprecatedChoiceIds?: string[] | undefined;
+                    onboardingScopes?: ("image-generation" | "music-generation" | "text-inference")[] | undefined;
+                    appGuidedSecret?: boolean | undefined;
+                    appGuidedAuth?: "device-code" | "oauth" | undefined;
+                    appGuidedActionLabel?: string | undefined;
+                    onboardingFeatured?: boolean | undefined;
+                    icon?: string | undefined;
+                    website?: string | undefined;
+                }[] | undefined;
+            }[];
+            modelCatalog?: {
+                providers: {
+                    [x: string]: {
+                        defaultModel?: string | undefined;
+                        models: {
+                            id: string;
+                            name?: string | undefined;
+                            input?: ("document" | "image" | "text")[] | undefined;
+                            reasoning?: boolean | undefined;
+                            contextWindow?: number | undefined;
+                            maxTokens?: number | undefined;
+                        }[];
+                    };
+                };
+            } | undefined;
+        } | undefined;
     } | {
         id: string;
         title: string;

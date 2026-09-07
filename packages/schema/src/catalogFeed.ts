@@ -27,6 +27,62 @@ export const CatalogFeedInstallCandidateSchema = type({
 });
 export type CatalogFeedInstallCandidate = (typeof CatalogFeedInstallCandidateSchema)[inferred];
 
+const CatalogFeedProviderAuthChoiceSchema = type({
+  "+": "reject",
+  method: "string",
+  choiceId: "string",
+  choiceLabel: "string",
+  choiceHint: "string?",
+  assistantPriority: "number?",
+  assistantVisibility: type('"visible"|"manual-only"').optional(),
+  groupId: "string?",
+  groupLabel: "string?",
+  groupHint: "string?",
+  optionKey: "string?",
+  cliFlag: "string?",
+  cliOption: "string?",
+  cliDescription: "string?",
+  deprecatedChoiceIds: "string[]?",
+  onboardingScopes: type('("text-inference"|"image-generation"|"music-generation")[]').optional(),
+  appGuidedSecret: "boolean?",
+  appGuidedAuth: type('"oauth"|"device-code"').optional(),
+  appGuidedActionLabel: "string?",
+  onboardingFeatured: "boolean?",
+  icon: "string?",
+  website: "string?",
+});
+const CatalogFeedModelPreviewSchema = type({
+  "+": "reject",
+  id: "string",
+  name: "string?",
+  input: type('("text"|"image"|"document")[]').optional(),
+  reasoning: "boolean?",
+  contextWindow: "number?",
+  maxTokens: "number?",
+});
+
+export const CatalogFeedOpenClawSchema = type({
+  "+": "reject",
+  plugin: { "+": "reject", id: "string", label: "string?" },
+  providers: type({
+    "+": "reject",
+    id: "string",
+    envVars: "string[]?",
+    authChoices: CatalogFeedProviderAuthChoiceSchema.array().optional(),
+  }).array(),
+  modelCatalog: type({
+    "+": "reject",
+    providers: {
+      "[string]": {
+        "+": "reject",
+        defaultModel: "string?",
+        models: CatalogFeedModelPreviewSchema.array(),
+      },
+    },
+  }).optional(),
+});
+export type CatalogFeedOpenClaw = (typeof CatalogFeedOpenClawSchema)[inferred];
+
 const CatalogFeedEntryBaseSchema = {
   "+": "reject",
   id: "string",
@@ -52,6 +108,7 @@ const CatalogFeedEntryBaseSchema = {
 export const CatalogFeedPluginEntrySchema = type({
   ...CatalogFeedEntryBaseSchema,
   type: '"plugin"',
+  openclaw: CatalogFeedOpenClawSchema.optional(),
 });
 export type CatalogFeedPluginEntry = (typeof CatalogFeedPluginEntrySchema)[inferred];
 
@@ -133,6 +190,9 @@ export function serializeCatalogFeed(feed: CatalogFeed): string {
       state: entry.state,
       ...(entry.featured === undefined ? {} : { featured: entry.featured }),
       ...(entry.featuredAt === undefined ? {} : { featuredAt: entry.featuredAt }),
+      ...(entry.type === "plugin" && entry.openclaw
+        ? { openclaw: orderMetadataKeys(entry.openclaw) }
+        : {}),
       publisher: {
         id: entry.publisher.id,
         trust: entry.publisher.trust,
@@ -173,4 +233,16 @@ export function serializeCatalogFeed(feed: CatalogFeed): string {
     ...(parsed.description === undefined ? {} : { description: parsed.description }),
     entries,
   });
+}
+
+function orderMetadataKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(orderMetadataKeys);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, orderMetadataKeys(nested)]),
+    );
+  }
+  return value;
 }

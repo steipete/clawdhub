@@ -156,10 +156,12 @@ async function npmPackFixture(destination: string) {
     { cwd: destination },
   );
   const output = JSON.parse(stdout) as unknown;
-  const filename =
-    Array.isArray(output) && typeof output[0]?.filename === "string"
-      ? output[0].filename
+  const packed = Array.isArray(output)
+    ? output[0]
+    : output && typeof output === "object"
+      ? Object.values(output)[0]
       : undefined;
+  const filename = packed && typeof packed.filename === "string" ? packed.filename : undefined;
   if (!filename) throw new Error("npm pack did not return a fixture filename");
   return join(destination, filename);
 }

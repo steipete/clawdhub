@@ -1,11 +1,22 @@
-import { CATALOG_FEED_ID, CATALOG_SKILLS_FEED_ID, EXPERIMENTAL_CLAW_FEED_ID } from "clawhub-schema";
+/* @vitest-environment edge-runtime */
+
+import {
+  CATALOG_FEED_ID,
+  CATALOG_SKILLS_FEED_ID,
+  EXPERIMENTAL_CLAW_FEED_ID,
+  type CatalogFeedPluginEntry,
+} from "clawhub-schema";
+import type { FunctionReturnType } from "convex/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { internal } from "./_generated/api";
 import {
   listOfficialClawEntries,
   listOfficialEntries,
   listOfficialSkillEntries,
   publish,
 } from "./catalogFeed";
+import { sha256Hex } from "./lib/clawpack";
+import { toConvexSafeJsonValue } from "./lib/packageRegistry";
 
 vi.mock("./lib/publishers", () => ({
   getOwnerPublisher: vi.fn().mockResolvedValue({ handle: "openclaw" }),
@@ -18,12 +29,18 @@ type WrappedHandler<TArgs, TResult> = {
   _handler: (ctx: unknown, args: TArgs) => Promise<TResult>;
 };
 
-const listOfficialEntriesHandler = (
+const listOfficialProjectionsHandler = (
   listOfficialEntries as unknown as WrappedHandler<
     { family: "code-plugin" | "bundle-plugin" },
-    unknown[]
+    FunctionReturnType<typeof internal.catalogFeed.listOfficialEntries>
   >
 )._handler;
+async function listOfficialEntriesHandler(
+  ctx: unknown,
+  args: { family: "code-plugin" | "bundle-plugin" },
+) {
+  return (await listOfficialProjectionsHandler(ctx, args)).map(({ entry }) => entry);
+}
 const listOfficialClawEntriesHandler = (
   listOfficialClawEntries as unknown as WrappedHandler<Record<string, never>, unknown[]>
 )._handler;
@@ -60,6 +77,7 @@ function makeRelease(overrides: Record<string, unknown> = {}) {
     integritySha256: "ignored",
     artifactKind: "legacy-zip",
     sha256hash: "artifact-hash",
+    files: [],
     verification: { scanStatus: "clean" },
     manualModeration: undefined,
     softDeletedAt: undefined,
@@ -192,6 +210,48 @@ function makeCtx(
   };
 }
 
+async function publishProviderManifest(
+  manifest: Record<string, unknown>,
+  overrides: { pkg?: Record<string, unknown>; release?: Record<string, unknown> } = {},
+) {
+  const bytes = new TextEncoder().encode(JSON.stringify(manifest));
+  const file = {
+    path: "openclaw.plugin.json",
+    storageId: "storage:manifest",
+    size: bytes.byteLength,
+    sha256: await sha256Hex(bytes),
+  };
+  const projections = await listOfficialProjectionsHandler(
+    makeCtx([makePackage(overrides.pkg)], {
+      "packageReleases:1": makeRelease({
+        runtimeId: "demo-plugin",
+        files: [file],
+        extractedPluginManifest: toConvexSafeJsonValue(manifest, { maxDepth: 10 }),
+        ...overrides.release,
+      }),
+    }),
+    { family: "code-plugin" },
+  );
+  let entries: CatalogFeedPluginEntry[] = [];
+  await publishHandler(
+    {
+      storage: { get: vi.fn(async () => new Blob([bytes])) },
+      runQuery: vi.fn(async (_ref: unknown, args: Record<string, unknown>) => {
+        if ("family" in args) return args.family === "code-plugin" ? projections : [];
+        return { publishers: [], isDone: true, continueCursor: "" };
+      }),
+      runMutation: vi.fn(
+        async (_ref: unknown, args: { feedId: string; entries: CatalogFeedPluginEntry[] }) => {
+          if (args.feedId === CATALOG_FEED_ID) entries = args.entries;
+          return { feedId: args.feedId };
+        },
+      ),
+    },
+    { expiresAt: "2026-09-02T00:00:00.000Z" },
+  );
+  return entries;
+}
+
 describe("catalog feed projection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -268,6 +328,285 @@ describe("catalog feed projection", () => {
           ],
         },
       }),
+    ]);
+  });
+
+  it("projects only release-owned provider setup and display metadata beside its pinned artifact", async () => {
+    const choice = {
+      provider: "demo",
+      method: "api-key",
+      choiceId: "demo-api-key",
+      choiceLabel: "Demo API key",
+      choiceHint: "Use a Demo key",
+      assistantPriority: 10,
+      assistantVisibility: "visible",
+      groupId: "demo",
+      groupLabel: "Demo",
+      groupHint: "Cloud inference",
+      optionKey: "demoApiKey",
+      cliFlag: "--demo-api-key",
+      cliOption: "--demo-api-key <key>",
+      cliDescription: "Demo API key",
+      deprecatedChoiceIds: ["demo-key"],
+      onboardingScopes: ["text-inference"],
+      appGuidedSecret: true,
+      appGuidedActionLabel: "Connect Demo",
+      onboardingFeatured: true,
+      icon: "https://example.test/demo.png",
+      website: "https://example.test/demo",
+    };
+    const model = {
+      id: "demo/latest",
+      name: "Demo Latest",
+      input: ["text", "image"],
+      reasoning: true,
+      contextWindow: 131072,
+      maxTokens: 4096,
+    };
+    const result = await publishProviderManifest(
+      {
+        id: "demo-plugin",
+        name: "Demo Provider",
+        providers: ["demo"],
+        setup: { providers: [{ id: "demo", envVars: ["DEMO_API_KEY"] }] },
+        providerAuthChoices: [
+          { ...choice, appGuidedDiscovery: true, apiKey: "not-feed-data" },
+          { ...choice, provider: "undeclared", choiceId: "undeclared-api-key" },
+          {
+            provider: "demo",
+            method: "oauth",
+            choiceId: "demo-oauth",
+            choiceLabel: "Demo OAuth",
+            appGuidedAuth: "device-code",
+          },
+        ],
+        modelCatalog: {
+          providers: {
+            demo: {
+              baseUrl: "https://not-a-feed-endpoint.test",
+              api: "openai-completions",
+              headers: { Authorization: "not-feed-data" },
+              defaultModel: "demo/latest",
+              models: [
+                {
+                  ...model,
+                  cost: { tieredPricing: [{ range: [0, 4096], input: 1 }] },
+                  compat: { supportsStore: false },
+                },
+              ],
+            },
+            undeclared: { models: [{ id: "not-a-provider" }] },
+          },
+        },
+        install: { npmSpec: "@elsewhere/unreviewed@latest", expectedIntegrity: "ignored" },
+      },
+      { pkg: { runtimeId: "stale-package-id" } },
+    );
+    const { provider: _provider, ...expectedChoice } = choice;
+
+    expect(result[0]?.openclaw).toEqual({
+      plugin: { id: "demo-plugin", label: "Demo Provider" },
+      providers: [
+        {
+          id: "demo",
+          envVars: ["DEMO_API_KEY"],
+          authChoices: [
+            expectedChoice,
+            {
+              method: "oauth",
+              choiceId: "demo-oauth",
+              choiceLabel: "Demo OAuth",
+              appGuidedAuth: "device-code",
+            },
+          ],
+        },
+      ],
+      modelCatalog: { providers: { demo: { defaultModel: "demo/latest", models: [model] } } },
+    });
+    expect(result[0]?.install.candidates).toEqual([
+      {
+        sourceRef: "public-clawhub",
+        package: "@openclaw/demo",
+        version: "1.2.3",
+        integrity: "sha256:artifact-hash",
+      },
+    ]);
+  });
+
+  it.each([
+    { name: "mismatched runtime identity", id: "different-plugin", providers: ["demo"] },
+    { name: "missing provider declarations", id: "demo-plugin", providers: [] },
+  ])(
+    "omits provider metadata with $name without hiding the installable package",
+    async ({ id, providers }) => {
+      const result = await publishProviderManifest({
+        id,
+        providers,
+        providerAuthChoices: [
+          { provider: "demo", method: "api-key", choiceId: "demo-api-key", choiceLabel: "Demo" },
+        ],
+      });
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).not.toHaveProperty("openclaw");
+      expect(result[0]?.install.candidates[0]?.version).toBe("1.2.3");
+    },
+  );
+
+  it("bounds model previews deterministically while retaining the declared default", async () => {
+    const models = Array.from({ length: 80 }, (_, index) => ({
+      id: `model-${index.toString().padStart(2, "0")}`,
+      name: `${index} ${"Model ".repeat(35).trim()}`,
+      input: ["text"],
+    }));
+    const project = async (input: typeof models) => {
+      const [entry] = await publishProviderManifest({
+        id: "demo-plugin",
+        providers: ["demo"],
+        modelCatalog: {
+          providers: { demo: { defaultModel: "model-79", models: input } },
+        },
+      });
+      return entry?.openclaw?.modelCatalog;
+    };
+    const preview = await project(models);
+
+    expect(preview?.providers.demo?.defaultModel).toBe("model-79");
+    expect(preview?.providers.demo?.models).toContainEqual(models[79]);
+    expect(preview?.providers.demo?.models.length).toBeLessThanOrEqual(64);
+    expect(new TextEncoder().encode(JSON.stringify(preview)).byteLength).toBeLessThanOrEqual(
+      16 * 1024,
+    );
+    expect(
+      await project([...models].sort((left, right) => right.id.localeCompare(left.id))),
+    ).toEqual(preview);
+  });
+
+  it("never mistakes a rewritten stored key for a declared provider's model catalog", async () => {
+    const [entry] = await publishProviderManifest({
+      id: "demo-plugin",
+      providers: ["demo", "underscore_shadow"],
+      modelCatalog: {
+        providers: {
+          demo: { models: [{ id: "safe" }] },
+          underscore_shadow: { models: [{ id: "owned-model" }] },
+          _shadow: { models: [{ id: "belongs-to-undeclared-provider" }] },
+        },
+      },
+    });
+
+    expect(entry?.openclaw?.providers).toEqual([{ id: "demo" }, { id: "underscore_shadow" }]);
+    expect(entry?.openclaw?.modelCatalog).toEqual({
+      providers: {
+        demo: { models: [{ id: "safe" }] },
+        underscore_shadow: { models: [{ id: "owned-model" }] },
+      },
+    });
+  });
+
+  it("bounds provider and auth discovery after deduplication and stable ordering", async () => {
+    const providers = Array.from(
+      { length: 35 },
+      (_, index) => `provider-${index.toString().padStart(2, "0")}`,
+    );
+    const choices = Array.from({ length: 18 }, (_, index) => ({
+      provider: providers[0],
+      method: "api-key",
+      choiceId: `choice-${index.toString().padStart(2, "0")}`,
+      choiceLabel: `Choice ${index}`,
+    }));
+    const project = async (ids: string[], authChoices: typeof choices) => {
+      const [entry] = await publishProviderManifest({
+        id: "demo-plugin",
+        providers: ids,
+        providerAuthChoices: authChoices,
+        setup: { providers: [{ id: providers[0], envVars: ["PREFERRED_KEY", "FALLBACK_KEY"] }] },
+      });
+      return entry?.openclaw;
+    };
+    const metadata = await project([...providers, providers[0]], [...choices, choices[0]]);
+
+    expect(metadata?.providers.map(({ id }) => id)).toEqual(providers.slice(0, 32));
+    expect(metadata?.providers[0]?.authChoices?.map(({ choiceId }) => choiceId)).toEqual(
+      choices.slice(0, 16).map(({ choiceId }) => choiceId),
+    );
+    expect(metadata?.providers[0]?.envVars).toEqual(["PREFERRED_KEY", "FALLBACK_KEY"]);
+    expect(
+      await project(
+        [...providers].sort((left, right) => right.localeCompare(left)),
+        [...choices].sort((left, right) => right.choiceId.localeCompare(left.choiceId)),
+      ),
+    ).toEqual(metadata);
+  });
+
+  it("bounds complete setup metadata before admitting model previews", async () => {
+    const providers = Array.from(
+      { length: 20 },
+      (_, index) => `provider-${index.toString().padStart(2, "0")}`,
+    );
+    const url = `https://example.test/${"é".repeat(300)}`;
+    const providerAuthChoices = providers.flatMap((provider) =>
+      Array.from({ length: 16 }, (_, index) => ({
+        provider,
+        method: "api-key",
+        choiceId: `${provider}-${index.toString().padStart(2, "0")}`,
+        choiceLabel: `Connect ${provider}`,
+        icon: url,
+        website: url,
+        appGuidedSecret: true,
+        assistantPriority: index,
+      })),
+    );
+    const manifest = { id: "demo-plugin", providers, providerAuthChoices };
+    const [setupOnly] = await publishProviderManifest(manifest);
+    const [withModels] = await publishProviderManifest({
+      ...manifest,
+      modelCatalog: {
+        providers: Object.fromEntries(
+          providers.map((provider) => [
+            provider,
+            {
+              defaultModel: "latest",
+              models: [{ id: "latest", name: "Latest" }],
+            },
+          ]),
+        ),
+      },
+    });
+
+    expect(
+      new TextEncoder().encode(JSON.stringify(withModels?.openclaw)).byteLength,
+    ).toBeLessThanOrEqual(64 * 1024);
+    expect(withModels?.openclaw?.providers).toEqual(setupOnly?.openclaw?.providers);
+    const choices =
+      withModels?.openclaw?.providers.flatMap((provider) => provider.authChoices ?? []) ?? [];
+    expect(choices.length).toBeGreaterThan(0);
+    for (const choice of choices) {
+      const { provider: _provider, ...original } = providerAuthChoices.find(
+        (entry) => entry.choiceId === choice.choiceId,
+      )!;
+      expect(choice).toEqual({ ...original, icon: new URL(url).href, website: new URL(url).href });
+    }
+  });
+
+  it("omits display URLs whose canonical encoding exceeds the URL limit", async () => {
+    const [entry] = await publishProviderManifest({
+      id: "demo-plugin",
+      providers: ["demo"],
+      providerAuthChoices: [
+        {
+          provider: "demo",
+          method: "api-key",
+          choiceId: "demo-api-key",
+          choiceLabel: "Demo",
+          icon: `https://example.test/${"é".repeat(1900)}`,
+          website: `https://example.test/${"é".repeat(1900)}`,
+        },
+      ],
+    });
+
+    expect(entry?.openclaw?.providers[0]?.authChoices).toEqual([
+      { method: "api-key", choiceId: "demo-api-key", choiceLabel: "Demo" },
     ]);
   });
 
