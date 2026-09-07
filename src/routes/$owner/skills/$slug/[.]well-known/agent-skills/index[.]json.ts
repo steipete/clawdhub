@@ -1,6 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { publicApiUrl } from "../../../../../../lib/publicApiUrl";
 
+export const AGENT_SKILLS_DISCOVERY_TIMEOUT_MS = 10_000;
+
 export const Route = createFileRoute("/$owner/skills/$slug/.well-known/agent-skills/index.json")({
   server: {
     handlers: {
@@ -10,13 +12,18 @@ export const Route = createFileRoute("/$owner/skills/$slug/.well-known/agent-ski
   },
 });
 
-async function fetchAgentSkillsDiscovery(owner: string, slug: string, method: "GET" | "HEAD") {
+export async function fetchAgentSkillsDiscovery(
+  owner: string,
+  slug: string,
+  method: "GET" | "HEAD",
+) {
   const upstream = publicApiUrl(
     `/api/v1/agent-skills/${encodeURIComponent(owner)}/${encodeURIComponent(slug)}/index.json`,
   );
   const response = await fetch(upstream, {
     method,
     headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(AGENT_SKILLS_DISCOVERY_TIMEOUT_MS),
   });
   return proxyAgentSkillsDiscoveryResponse(response, method === "GET");
 }
