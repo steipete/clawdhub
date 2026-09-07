@@ -11843,7 +11843,7 @@ describe("packages public queries", () => {
     );
   });
 
-  it("revokes trusted publish tokens after a successful publish", async () => {
+  it("accepts and records tag refs for ordinary trusted publishes", async () => {
     const runMutation = vi.fn(async (_ref: unknown, args: unknown) => {
       if (
         typeof args === "object" &&
@@ -11886,7 +11886,7 @@ describe("packages public queries", () => {
           environment: "clawhub-release",
           version: "1.0.0",
           sha: "abc123",
-          ref: "refs/heads/main",
+          ref: "refs/tags/v1.0.0",
           runId: "100",
           runAttempt: "1",
           expiresAt: Date.now() + 60_000,
@@ -11913,6 +11913,15 @@ describe("packages public queries", () => {
           version: "1.0.0",
           changelog: "init",
           bundle: { hostTargets: ["desktop"] },
+          source: {
+            kind: "github",
+            url: "https://github.com/example/example",
+            repo: "example/example",
+            ref: "refs/tags/v1.0.0",
+            commit: "abc123",
+            path: ".",
+            importedAt: 1,
+          },
           files: [packageManifestFile],
         },
       }),
@@ -11925,7 +11934,114 @@ describe("packages public queries", () => {
     expect(runMutation).toHaveBeenCalledWith(expect.anything(), {
       tokenId: "packagePublishTokens:1",
     });
+    expect(runMutation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        source: expect.objectContaining({
+          repo: "example/example",
+          ref: "refs/tags/v1.0.0",
+          commit: "abc123",
+          path: ".",
+        }),
+      }),
+    );
   });
+
+  it.each([
+    {
+      mode: "ordinary commit",
+      candidateSha: undefined,
+      sourceCommit: "wrong-sha",
+      sourceRef: "refs/tags/v1.0.0",
+      expectedError: "Trusted publish source commit must match the authorized source commit",
+    },
+    {
+      mode: "ordinary ref",
+      candidateSha: undefined,
+      sourceCommit: "abc123",
+      sourceRef: "refs/tags/v2.0.0",
+      expectedError: "Trusted publish source ref must match the authorized source ref",
+    },
+    {
+      mode: "split-candidate commit",
+      candidateSha: "candidate-sha",
+      sourceCommit: "abc123",
+      sourceRef: "candidate-sha",
+      expectedError: "Trusted publish source commit must match the authorized source commit",
+    },
+    {
+      mode: "split-candidate ref",
+      candidateSha: "candidate-sha",
+      sourceCommit: "candidate-sha",
+      sourceRef: "refs/tags/v1.0.0",
+      expectedError: "Trusted publish source ref must match the authorized source ref",
+    },
+  ])(
+    "rejects $mode mismatches",
+    async ({ candidateSha, sourceCommit, sourceRef, expectedError }) => {
+      const trustedPublisher = {
+        _id: "packageTrustedPublishers:1",
+        packageId: "packages:demo",
+        provider: "github-actions",
+        repository: "example/example",
+        repositoryId: "1",
+        repositoryOwner: "example",
+        repositoryOwnerId: "2",
+        workflowFilename: "plugin-clawhub-release.yml",
+        environment: "clawhub-release",
+      };
+      const ctx = {
+        runQuery: vi
+          .fn()
+          .mockResolvedValueOnce({
+            _id: "packagePublishTokens:1",
+            packageId: "packages:demo",
+            provider: "github-actions",
+            repository: "example/example",
+            repositoryId: "1",
+            repositoryOwner: "example",
+            repositoryOwnerId: "2",
+            workflowFilename: "plugin-clawhub-release.yml",
+            environment: "clawhub-release",
+            version: "1.0.0",
+            sha: "abc123",
+            ref: "refs/tags/v1.0.0",
+            runId: "100",
+            runAttempt: "1",
+            candidateSha,
+            expiresAt: Date.now() + 60_000,
+          })
+          .mockResolvedValueOnce(trustedPublisher)
+          .mockResolvedValueOnce(makePackageDoc({ family: "bundle-plugin" }))
+          .mockResolvedValueOnce(trustedPublisher),
+      };
+
+      await expect(
+        publishPackageForTrustedPublisherInternalHandler(ctx as never, {
+          publishTokenId: "packagePublishTokens:1",
+          payload: {
+            name: "demo-plugin",
+            family: "bundle-plugin",
+            version: "1.0.0",
+            changelog: "init",
+            bundle: { hostTargets: ["desktop"] },
+            source: {
+              kind: "github",
+              url: "https://github.com/example/example",
+              repo: "example/example",
+              ref: sourceRef,
+              commit: sourceCommit,
+              path: ".",
+              importedAt: 1,
+            },
+            files: [packageManifestFile],
+          },
+        }),
+      ).rejects.toThrow(expectedError);
+
+      expect(ctx.runQuery).toHaveBeenCalledTimes(4);
+    },
+  );
 
   it("revokes trusted publish tokens when a staged publish is accepted for checks", async () => {
     const previousFlag = process.env.CLAWHUB_STAGED_PREPUBLICATION_PUBLISHES;

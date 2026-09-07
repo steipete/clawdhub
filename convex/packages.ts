@@ -8212,6 +8212,9 @@ function resolveTrustedPublishSource(
   const source = payload.source;
   const sourceRepository = publishToken.candidateRepository ?? publishToken.repository;
   const sourceSha = publishToken.candidateSha ?? publishToken.sha;
+  // Split-candidate credentials pin both fields to the candidate SHA; ordinary credentials
+  // preserve the verified workflow ref while still binding the commit to its authorized SHA.
+  const sourceRef = publishToken.candidateSha ?? publishToken.ref;
   if (source && source.kind !== "github") {
     throw new ConvexError("Trusted publishes only support GitHub source metadata");
   }
@@ -8223,17 +8226,17 @@ function resolveTrustedPublishSource(
     throw new ConvexError("Trusted publish source repo must match the verified GitHub repository");
   }
   if (source?.commit && source.commit !== sourceSha) {
-    throw new ConvexError("Trusted publish source commit must match the authorized candidate SHA");
+    throw new ConvexError("Trusted publish source commit must match the authorized source commit");
   }
-  if (source?.ref && source.ref !== sourceSha) {
-    throw new ConvexError("Trusted publish source ref must match the authorized candidate SHA");
+  if (source?.ref && source.ref !== sourceRef) {
+    throw new ConvexError("Trusted publish source ref must match the authorized source ref");
   }
   const path = source?.path?.trim() || ".";
   return {
     kind: "github",
     url: `https://github.com/${sourceRepository}`,
     repo: sourceRepository,
-    ref: sourceSha,
+    ref: sourceRef,
     commit: sourceSha,
     path,
     importedAt: source?.importedAt ?? Date.now(),
