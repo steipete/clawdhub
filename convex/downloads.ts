@@ -247,10 +247,23 @@ export async function downloadZipHandler(
     });
   }
 
-  const entries = version.files.map((file) => ({
-    path: file.path,
-    openStream: async () => (await ctx.storage.get(file.storageId))?.stream() ?? null,
-  }));
+  const entries: Array<{
+    path: string;
+    openStream: () => Promise<ReadableStream<Uint8Array> | null>;
+  }> = [];
+  for (const file of version.files) {
+    const blob = await ctx.storage.get(file.storageId);
+    if (!blob) {
+      return new Response("Skill archive file missing from storage", {
+        status: 410,
+        headers: mergeHeaders(rate.headers, corsHeaders()),
+      });
+    }
+    entries.push({
+      path: file.path,
+      openStream: async () => blob.stream(),
+    });
+  }
   const zipStream = buildDeterministicZipStream(entries, meta);
 
   await scheduleSkillDownloadMetric(ctx, request, skill._id);
