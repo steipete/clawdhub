@@ -5,10 +5,12 @@ import type { Id } from "./_generated/dataModel";
 import type { ActionCtx } from "./_generated/server";
 import {
   formatUserFacingErrorMessage,
+  parseMultipartPublish,
   parseMultipartSkillScan,
   resolveTagsBatch,
   softDeleteErrorToResponse,
 } from "./httpApiV1/shared";
+import { MAX_PUBLISH_FILE_BYTES } from "./lib/publishLimits";
 
 function makeCtx() {
   return {
@@ -160,5 +162,75 @@ describe("http API v1 shared helpers", () => {
       }),
     ).rejects.toThrow("update is not valid for uploaded scans");
     expect(store).not.toHaveBeenCalled();
+  });
+
+  it("deletes stored publish blobs when the payload fails after upload", async () => {
+    const form = new FormData();
+    form.set(
+      "payload",
+      JSON.stringify({
+        displayName: "Demo",
+        version: "1.0.0",
+        changelog: "",
+        tags: ["latest"],
+      }),
+    );
+    form.append("files", new Blob(["# Demo"], { type: "text/markdown" }), "SKILL.md");
+    const request = new Request("https://clawhub.ai/api/v1/skills", {
+      method: "POST",
+      body: form,
+    });
+    const store = vi.fn().mockResolvedValue("storage:1");
+    const remove = vi.fn().mockResolvedValue(undefined);
+    const ctx = {
+      storage: {
+        store,
+        delete: remove,
+      },
+    } as unknown as ActionCtx;
+
+    await expect(parseMultipartPublish(ctx, request)).rejects.toThrow(/slug/i);
+    expect(store).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledWith("storage:1");
+  });
+
+  it("does not store publish files when a later part exceeds the size limit", async () => {
+    const form = new FormData();
+    form.set(
+      "payload",
+      JSON.stringify({
+        slug: "demo",
+        displayName: "Demo",
+        version: "1.0.0",
+        changelog: "",
+        acceptLicenseTerms: true,
+        tags: ["latest"],
+      }),
+    );
+    form.append("files", new Blob(["# Demo"], { type: "text/markdown" }), "SKILL.md");
+    form.append(
+      "files",
+      new File([new Uint8Array(MAX_PUBLISH_FILE_BYTES + 1)], "big.bin", {
+        type: "application/octet-stream",
+      }),
+    );
+    const request = new Request("https://clawhub.ai/api/v1/skills", {
+      method: "POST",
+      body: form,
+    });
+    const store = vi.fn().mockResolvedValue("storage:1");
+    const remove = vi.fn().mockResolvedValue(undefined);
+    const ctx = {
+      storage: {
+        store,
+        delete: remove,
+      },
+    } as unknown as ActionCtx;
+
+    await expect(parseMultipartPublish(ctx, request)).rejects.toThrow(
+      'File "big.bin" exceeds 10MB limit',
+    );
+    expect(store).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
   });
 });
