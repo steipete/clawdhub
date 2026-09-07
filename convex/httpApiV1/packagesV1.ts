@@ -1357,6 +1357,27 @@ async function storeClawPackFile(
 const CLAWPACK_STORE_BATCH_BYTES = 8 * 1024 * 1024;
 const CLAWPACK_STORE_BATCH_FILES = 16;
 
+async function deleteUnpublishedPackagePublishBlobs(
+  ctx: ActionCtx,
+  stored: {
+    files?: Array<{ storageId: string }>;
+    artifact?: { storageId?: string } | null;
+  },
+) {
+  const remove = ctx.storage.delete?.bind(ctx.storage);
+  if (!remove) {
+    return;
+  }
+  const storageIds: string[] = [];
+  for (const file of stored.files ?? []) {
+    storageIds.push(file.storageId);
+  }
+  if (stored.artifact?.storageId) {
+    storageIds.push(stored.artifact.storageId);
+  }
+  await Promise.allSettled(storageIds.map((storageId) => remove(storageId as Id<"_storage">)));
+}
+
 async function storeClawPackFiles(
   ctx: ActionCtx,
   entries: Array<{ path: string; bytes: Uint8Array }>,
@@ -1365,20 +1386,34 @@ async function storeClawPackFiles(
   let batch: Array<{ path: string; bytes: Uint8Array }> = [];
   let batchBytes = 0;
   const flush = async () => {
-    files.push(...(await Promise.all(batch.map((entry) => storeClawPackFile(ctx, entry)))));
+    const results = await Promise.allSettled(batch.map((entry) => storeClawPackFile(ctx, entry)));
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        files.push(result.value);
+      }
+    }
+    const rejected = results.find((result) => result.status === "rejected");
+    if (rejected?.status === "rejected") {
+      throw rejected.reason;
+    }
     batch = [];
     batchBytes = 0;
   };
-  for (const entry of entries) {
-    const overflows =
-      batch.length >= CLAWPACK_STORE_BATCH_FILES ||
-      batchBytes + entry.bytes.byteLength > CLAWPACK_STORE_BATCH_BYTES;
-    if (batch.length > 0 && overflows) await flush();
-    batch.push(entry);
-    batchBytes += entry.bytes.byteLength;
+  try {
+    for (const entry of entries) {
+      const overflows =
+        batch.length >= CLAWPACK_STORE_BATCH_FILES ||
+        batchBytes + entry.bytes.byteLength > CLAWPACK_STORE_BATCH_BYTES;
+      if (batch.length > 0 && overflows) await flush();
+      batch.push(entry);
+      batchBytes += entry.bytes.byteLength;
+    }
+    if (batch.length > 0) await flush();
+    return files;
+  } catch (error) {
+    await deleteUnpublishedPackagePublishBlobs(ctx, { files });
+    throw error;
   }
-  if (batch.length > 0) await flush();
-  return files;
 }
 
 async function storeUploadedPackageFile(
@@ -1489,8 +1524,14 @@ async function buildPackagePublishRequestFromClawPack(
     npmUnpackedSize: parsed.unpackedSize,
     npmFileCount: parsed.fileCount,
   };
-  const files = await storeClawPackFiles(ctx, parsed.entries);
-  return { ...metadata, files, artifact };
+  try {
+    const files = await storeClawPackFiles(ctx, parsed.entries);
+    return { ...metadata, files, artifact };
+  } catch (error) {
+    // Extracted-file store failed after the tarball was already written.
+    await deleteUnpublishedPackagePublishBlobs(ctx, { artifact });
+    throw error;
+  }
 }
 
 function assertClawPackPublicationIdentity(
@@ -1630,11 +1671,26 @@ async function parseMultipartPackagePublish(
   }
 
   const packageFileParts = fileParts.filter((entry) => !isMacJunkPath(entry.name));
-  const files = await Promise.all(
-    packageFileParts.map((entry) => storeUploadedPackageFile(ctx, entry)),
-  );
-  if (files.length === 0) throw new Error("files required");
-  return { ...metadata, files };
+  const files: StoredPackagePublishFile[] = [];
+  try {
+    const results = await Promise.allSettled(
+      packageFileParts.map((entry) => storeUploadedPackageFile(ctx, entry)),
+    );
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        files.push(result.value);
+      }
+    }
+    const rejected = results.find((result) => result.status === "rejected");
+    if (rejected?.status === "rejected") {
+      throw rejected.reason;
+    }
+    if (files.length === 0) throw new Error("files required");
+    return { ...metadata, files };
+  } catch (error) {
+    await deleteUnpublishedPackagePublishBlobs(ctx, { files });
+    throw error;
+  }
 }
 
 async function listPackages(
@@ -2521,12 +2577,13 @@ export async function publishPackageV1Handler(ctx: ActionCtx, request: Request) 
   const auth = await requirePackagePublishAuthOrResponse(ctx, request, rate.headers);
   if (!auth.ok) return auth.response;
 
+  let payload: ServerPackagePublishRequest | undefined;
   try {
     const contentType = request.headers.get("content-type") ?? "";
     if (!contentType.includes("multipart/form-data")) {
       return text("Package publish requires multipart/form-data", 415, rate.headers);
     }
-    const payload = await parseMultipartPackagePublish(ctx, auth.auth, request);
+    payload = await parseMultipartPackagePublish(ctx, auth.auth, request);
     const result =
       auth.auth.kind === "user"
         ? await runActionRef(ctx, internalRefs.packages.publishPackageForUserInternal, {
@@ -2539,6 +2596,10 @@ export async function publishPackageV1Handler(ctx: ActionCtx, request: Request) 
           });
     return json(result, 200, rate.headers);
   } catch (error) {
+    // Parse succeeded, so these blobs have no release owner yet.
+    if (payload) {
+      await deleteUnpublishedPackagePublishBlobs(ctx, payload);
+    }
     return packagePublishErrorToResponse(error, rate.headers);
   }
 }

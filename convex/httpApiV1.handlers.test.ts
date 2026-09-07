@@ -16899,6 +16899,147 @@ describe("httpApiV1 handlers", () => {
     );
   });
 
+  it("delete unpublished package blobs when loose-file publish action throws after stores", async () => {
+    vi.mocked(getOptionalApiTokenUserId).mockResolvedValue("users:1" as never);
+    vi.mocked(requirePackagePublishAuth).mockResolvedValue({
+      kind: "user",
+      userId: "users:1",
+      user: { _id: "users:1", handle: "p" },
+    } as never);
+    const runMutation = vi.fn().mockResolvedValue(okRate());
+    const runAction = vi.fn().mockRejectedValue(new Error("GitHub account is too new to publish"));
+    const storedIds: string[] = [];
+    const storageStore = vi.fn(async () => {
+      const id = `storage:loose-${storedIds.length + 1}`;
+      storedIds.push(id);
+      return id;
+    });
+    const storageDelete = vi.fn(async () => {});
+    const form = packagePublishForm(
+      packagePublishMetadata({
+        ownerHandle: "openclaw",
+        bundle: { hostTargets: ["desktop"] },
+      }),
+    );
+    form.append("files", new File(["{}"], "openclaw.plugin.json", { type: "application/json" }));
+    form.append("files", new File(["readme"], "README.md", { type: "text/markdown" }));
+
+    const response = await __handlers.publishPackageV1Handler(
+      makeCtx({
+        runAction,
+        runMutation,
+        storage: { store: storageStore, delete: storageDelete },
+      }),
+      new Request("https://example.com/api/v1/packages", {
+        method: "POST",
+        headers: { Authorization: "Bearer clh_test" },
+        body: form,
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("GitHub account is too new to publish");
+    expect(runAction).toHaveBeenCalledOnce();
+    expect(storedIds).toEqual(["storage:loose-1", "storage:loose-2"]);
+    expect(storageDelete).toHaveBeenCalledTimes(storedIds.length);
+    for (const id of storedIds) {
+      expect(storageDelete).toHaveBeenCalledWith(id);
+    }
+  });
+
+  it("delete unpublished package blobs when ClawPack extracted-file store throws after tarball store", async () => {
+    vi.mocked(getOptionalApiTokenUserId).mockResolvedValue("users:1" as never);
+    vi.mocked(requirePackagePublishAuth).mockResolvedValue({
+      kind: "user",
+      userId: "users:1",
+      user: { _id: "users:1", handle: "p" },
+    } as never);
+    const runMutation = vi.fn().mockResolvedValue(okRate());
+    const runAction = vi.fn();
+    const storageStore = vi.fn(async () => {
+      if (storageStore.mock.calls.length > 1) {
+        throw new Error("extracted store failed");
+      }
+      return "storage:tarball";
+    });
+    const storageDelete = vi.fn(async () => {});
+    const pack = npmPackFixture({
+      "package/package.json": JSON.stringify({ name: "demo-plugin", version: "1.0.0" }),
+      "package/openclaw.plugin.json": JSON.stringify({ id: "demo.plugin" }),
+      "package/dist/index.js": "export const demo = true;\n",
+    });
+    const form = packagePublishForm(packagePublishMetadata({ family: "code-plugin" }));
+    form.append(
+      "clawpack",
+      new File([bytesToArrayBuffer(pack)], "demo-plugin-1.0.0.tgz", {
+        type: "application/octet-stream",
+      }),
+    );
+
+    const response = await __handlers.publishPackageV1Handler(
+      makeCtx({
+        runAction,
+        runMutation,
+        storage: { store: storageStore, delete: storageDelete },
+      }),
+      new Request("https://example.com/api/v1/packages", {
+        method: "POST",
+        headers: { Authorization: "Bearer clh_test" },
+        body: form,
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("extracted store failed");
+    expect(runAction).not.toHaveBeenCalled();
+    expect(storageStore).toHaveBeenCalled();
+    expect(storageDelete).toHaveBeenCalledWith("storage:tarball");
+  });
+
+  it("delete unpublished package blobs when a later loose-file store throws", async () => {
+    vi.mocked(getOptionalApiTokenUserId).mockResolvedValue("users:1" as never);
+    vi.mocked(requirePackagePublishAuth).mockResolvedValue({
+      kind: "user",
+      userId: "users:1",
+      user: { _id: "users:1", handle: "p" },
+    } as never);
+    const runMutation = vi.fn().mockResolvedValue(okRate());
+    const runAction = vi.fn();
+    const storageStore = vi.fn(async () => {
+      if (storageStore.mock.calls.length > 1) {
+        throw new Error("second file store failed");
+      }
+      return "storage:first";
+    });
+    const storageDelete = vi.fn(async () => {});
+    const form = packagePublishForm(
+      packagePublishMetadata({
+        ownerHandle: "openclaw",
+        bundle: { hostTargets: ["desktop"] },
+      }),
+    );
+    form.append("files", new File(["{}"], "openclaw.plugin.json", { type: "application/json" }));
+    form.append("files", new File(["readme"], "README.md", { type: "text/markdown" }));
+
+    const response = await __handlers.publishPackageV1Handler(
+      makeCtx({
+        runAction,
+        runMutation,
+        storage: { store: storageStore, delete: storageDelete },
+      }),
+      new Request("https://example.com/api/v1/packages", {
+        method: "POST",
+        headers: { Authorization: "Bearer clh_test" },
+        body: form,
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("second file store failed");
+    expect(runAction).not.toHaveBeenCalled();
+    expect(storageDelete).toHaveBeenCalledWith("storage:first");
+  });
+
   it("returns package publish attempt status to the exact API token actor", async () => {
     vi.mocked(requirePackagePublishAuth).mockResolvedValue({
       kind: "user",
