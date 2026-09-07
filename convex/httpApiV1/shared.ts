@@ -386,6 +386,13 @@ function toFileLike(entry: FormDataEntryValue): FileLikeEntry | null {
   return entry as FileLikeEntry;
 }
 
+export async function deleteStoredMultipartFiles(
+  ctx: ActionCtx,
+  files: Array<{ storageId: Id<"_storage"> }>,
+) {
+  await Promise.allSettled(files.map((file) => ctx.storage.delete(file.storageId)));
+}
+
 export async function parseMultipartPublish(
   ctx: ActionCtx,
   request: Request,
@@ -402,6 +409,14 @@ export async function parseMultipartPublish(
     throw new Error("Invalid JSON payload");
   }
 
+  const fileEntries = form
+    .getAll("files")
+    .map((entry) => toFileLike(entry))
+    .filter((file): file is FileLikeEntry => Boolean(file))
+    .filter((file) => !isMacJunkPath(file.name));
+  const oversized = fileEntries.find((file) => file.size > MAX_PUBLISH_FILE_BYTES);
+  if (oversized) throw new Error(getPublishFileSizeError(oversized.name));
+
   const files: Array<{
     path: string;
     size: number;
@@ -410,44 +425,47 @@ export async function parseMultipartPublish(
     contentType?: string;
   }> = [];
 
-  for (const entry of form.getAll("files")) {
-    const file = toFileLike(entry);
-    if (!file) continue;
-    const path = file.name;
-    if (isMacJunkPath(path)) continue;
-    const size = file.size;
-    if (size > MAX_PUBLISH_FILE_BYTES) {
-      throw new Error(getPublishFileSizeError(path));
+  try {
+    for (const file of fileEntries) {
+      const path = file.name;
+      const size = file.size;
+      const contentType = file.type || undefined;
+      const buffer = new Uint8Array(await file.arrayBuffer());
+      const sha256 = await sha256Hex(buffer);
+      const storageId = await ctx.storage.store(file as Blob);
+      files.push({ path, size, storageId, sha256, contentType });
     }
-    const contentType = file.type || undefined;
-    const buffer = new Uint8Array(await file.arrayBuffer());
-    const sha256 = await sha256Hex(buffer);
-    const storageId = await ctx.storage.store(file as Blob);
-    files.push({ path, size, storageId, sha256, contentType });
+
+    const forkOf =
+      payload.forkOf && typeof payload.forkOf === "object" ? payload.forkOf : undefined;
+    const hasAcceptLicenseTerms = Object.prototype.hasOwnProperty.call(
+      payload,
+      "acceptLicenseTerms",
+    );
+    const body = {
+      slug: payload.slug,
+      displayName: payload.displayName,
+      ...(typeof payload.ownerHandle === "string" ? { ownerHandle: payload.ownerHandle } : {}),
+      ...(typeof payload.sourceOwnerHandle === "string"
+        ? { sourceOwnerHandle: payload.sourceOwnerHandle }
+        : {}),
+      ...(typeof payload.migrateOwner === "boolean" ? { migrateOwner: payload.migrateOwner } : {}),
+      version: payload.version,
+      changelog: typeof payload.changelog === "string" ? payload.changelog : "",
+      ...(hasAcceptLicenseTerms ? { acceptLicenseTerms: payload.acceptLicenseTerms } : {}),
+      tags: Array.isArray(payload.tags) ? payload.tags : undefined,
+      ...(Array.isArray(payload.categories) ? { categories: payload.categories } : {}),
+      ...(Array.isArray(payload.topics) ? { topics: payload.topics } : {}),
+      ...(payload.source ? { source: payload.source } : {}),
+      files,
+      ...(forkOf ? { forkOf } : {}),
+    };
+
+    return parsePublishBody(body);
+  } catch (error) {
+    await deleteStoredMultipartFiles(ctx, files);
+    throw error;
   }
-
-  const forkOf = payload.forkOf && typeof payload.forkOf === "object" ? payload.forkOf : undefined;
-  const hasAcceptLicenseTerms = Object.prototype.hasOwnProperty.call(payload, "acceptLicenseTerms");
-  const body = {
-    slug: payload.slug,
-    displayName: payload.displayName,
-    ...(typeof payload.ownerHandle === "string" ? { ownerHandle: payload.ownerHandle } : {}),
-    ...(typeof payload.sourceOwnerHandle === "string"
-      ? { sourceOwnerHandle: payload.sourceOwnerHandle }
-      : {}),
-    ...(typeof payload.migrateOwner === "boolean" ? { migrateOwner: payload.migrateOwner } : {}),
-    version: payload.version,
-    changelog: typeof payload.changelog === "string" ? payload.changelog : "",
-    ...(hasAcceptLicenseTerms ? { acceptLicenseTerms: payload.acceptLicenseTerms } : {}),
-    tags: Array.isArray(payload.tags) ? payload.tags : undefined,
-    ...(Array.isArray(payload.categories) ? { categories: payload.categories } : {}),
-    ...(Array.isArray(payload.topics) ? { topics: payload.topics } : {}),
-    ...(payload.source ? { source: payload.source } : {}),
-    files,
-    ...(forkOf ? { forkOf } : {}),
-  };
-
-  return parsePublishBody(body);
 }
 
 export async function parseMultipartSkillScan(
@@ -508,7 +526,7 @@ export async function parseMultipartSkillScan(
       files.push({ path, size, storageId, sha256, contentType });
     }
   } catch (error) {
-    await Promise.allSettled(files.map((file) => ctx.storage.delete(file.storageId)));
+    await deleteStoredMultipartFiles(ctx, files);
     throw error;
   }
 

@@ -8277,6 +8277,46 @@ describe("httpApiV1 handlers", () => {
     expect(publishVersionForUser).not.toHaveBeenCalled();
   });
 
+  it("publish multipart deletes stored blobs when owner resolution fails", async () => {
+    vi.mocked(requireApiTokenUser).mockResolvedValueOnce({
+      userId: "users:1",
+      user: { handle: "p" },
+    } as never);
+    const runMutation = vi.fn(async (_mutation: unknown, args: Record<string, unknown>) => {
+      if (isRateLimitArgs(args)) return okRate();
+      throw new Error("Publisher not found");
+    });
+    const form = new FormData();
+    form.set(
+      "payload",
+      JSON.stringify({
+        slug: "demo",
+        displayName: "Demo",
+        ownerHandle: "@missing",
+        version: "1.0.0",
+        changelog: "",
+        acceptLicenseTerms: true,
+        tags: ["latest"],
+      }),
+    );
+    form.append("files", new Blob(["hello"], { type: "text/plain" }), "SKILL.md");
+    const store = vi.fn().mockResolvedValue("storage:1");
+    const remove = vi.fn().mockResolvedValue(undefined);
+    const response = await __handlers.publishSkillV1Handler(
+      makeCtx({ runMutation, storage: { store, delete: remove } }),
+      new Request("https://example.com/api/v1/skills", {
+        method: "POST",
+        headers: { Authorization: "Bearer clh_test" },
+        body: form,
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect(await response.text()).toMatch(/publisher not found/i);
+    expect(publishVersionForUser).not.toHaveBeenCalled();
+    expect(store).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledWith("storage:1");
+  });
+
   it("publish json rejects omitted license terms", async () => {
     vi.mocked(requireApiTokenUser).mockResolvedValueOnce({
       userId: "users:1",
@@ -8455,8 +8495,10 @@ describe("httpApiV1 handlers", () => {
       }),
     );
     form.append("files", new Blob(["hello"], { type: "text/plain" }), "SKILL.md");
+    const store = vi.fn().mockResolvedValue("storage:1");
+    const remove = vi.fn().mockResolvedValue(undefined);
     const response = await __handlers.publishSkillV1Handler(
-      makeCtx({ runMutation, storage: { store: vi.fn().mockResolvedValue("storage:1") } }),
+      makeCtx({ runMutation, storage: { store, delete: remove } }),
       new Request("https://example.com/api/v1/skills", {
         method: "POST",
         headers: { Authorization: "Bearer clh_test" },
@@ -8466,6 +8508,8 @@ describe("httpApiV1 handlers", () => {
     expect(response.status).toBe(400);
     expect(await response.text()).toMatch(/license terms must be accepted/i);
     expect(publishVersionForUser).not.toHaveBeenCalled();
+    expect(store).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledWith("storage:1");
   });
 
   it("publish rejects explicit license refusal", async () => {
