@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { __test } from "./changelog";
 
 describe("changelog utils", () => {
@@ -42,5 +42,77 @@ describe("changelog utils", () => {
     });
     expect(text).toContain("Updated README and package contents");
     expect(text).not.toContain("SKILL.md");
+  });
+
+  describe("OpenAI changelog fetch deadline", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+      delete process.env.OPENAI_API_KEY;
+    });
+
+    it("passes an abort signal with the changelog timeout", async () => {
+      process.env.OPENAI_API_KEY = "test-key";
+      let seenSignal: AbortSignal | undefined;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string, init?: RequestInit) => {
+          seenSignal = init?.signal ?? undefined;
+          return new Response(
+            JSON.stringify({
+              output: [{ type: "message", content: [{ type: "output_text", text: "- Updated." }] }],
+            }),
+            { status: 200 },
+          );
+        }),
+      );
+
+      const text = await __test.generateWithOpenAI({
+        slug: "demo",
+        version: "1.0.1",
+        oldReadme: "old",
+        nextReadme: "new",
+        fileDiff: null,
+      });
+
+      expect(text).toBe("- Updated.");
+      expect(seenSignal).toBeInstanceOf(AbortSignal);
+      expect(fetch).toHaveBeenCalledWith(
+        "https://api.openai.com/v1/responses",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    });
+
+    it("aborts a hung OpenAI changelog fetch instead of waiting forever", async () => {
+      process.env.OPENAI_API_KEY = "test-key";
+      const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(), 20);
+        return controller.signal;
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((_url: string, init?: RequestInit) => {
+          return new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
+            });
+          });
+        }),
+      );
+
+      const started = Date.now();
+      await expect(
+        __test.generateWithOpenAI({
+          slug: "demo",
+          version: "1.0.1",
+          oldReadme: "old",
+          nextReadme: "new",
+          fileDiff: null,
+        }),
+      ).rejects.toMatchObject({ name: "AbortError" });
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(timeoutSpy).toHaveBeenCalledWith(__test.CHANGELOG_TIMEOUT_MS);
+    });
   });
 });
