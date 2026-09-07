@@ -529,18 +529,23 @@ export const completeSkillCardJob = action({
     const storageId = await ctx.storage.store(
       new Blob([args.markdown], { type: "text/markdown; charset=utf-8" }),
     );
-    return await runMutationRef(ctx, internalRefs.skillCards.attachCardAndSucceedJobInternal, {
-      jobId: args.jobId,
-      leaseToken: args.leaseToken,
-      runId: args.runId,
-      cardFile: {
-        path: SKILL_CARD_FILE_PATH,
-        size: encoded.byteLength,
-        storageId,
-        sha256,
-        contentType: "text/markdown; charset=utf-8",
-      },
-    });
+    try {
+      return await runMutationRef(ctx, internalRefs.skillCards.attachCardAndSucceedJobInternal, {
+        jobId: args.jobId,
+        leaseToken: args.leaseToken,
+        runId: args.runId,
+        cardFile: {
+          path: SKILL_CARD_FILE_PATH,
+          size: encoded.byteLength,
+          storageId,
+          sha256,
+          contentType: "text/markdown; charset=utf-8",
+        },
+      });
+    } catch (error) {
+      await ctx.storage.delete(storageId).catch(() => undefined);
+      throw error;
+    }
   },
 });
 

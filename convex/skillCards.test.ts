@@ -738,6 +738,61 @@ describe("skillCards attach", () => {
     process.env.SECURITY_SCAN_WORKER_TOKEN = previousToken;
   });
 
+  it("deletes the stored card blob when attach fails", async () => {
+    const previousToken = process.env.SECURITY_SCAN_WORKER_TOKEN;
+    process.env.SECURITY_SCAN_WORKER_TOKEN = "test-worker-token";
+    const store = vi.fn(async () => "_storage:new-card");
+    const deleteStorage = vi.fn(async () => undefined);
+    const runMutation = vi.fn(async () => {
+      throw new Error("Lease mismatch");
+    });
+
+    await expect(
+      completeHandler(
+        {
+          storage: { store, delete: deleteStorage },
+          runMutation,
+        },
+        {
+          token: "test-worker-token",
+          jobId: "skillCardGenerationJobs:1",
+          leaseToken: "stale-lease",
+          markdown: "# Card\n",
+        },
+      ),
+    ).rejects.toThrow(/Lease mismatch/);
+
+    expect(store).toHaveBeenCalledOnce();
+    expect(deleteStorage).toHaveBeenCalledWith("_storage:new-card");
+    process.env.SECURITY_SCAN_WORKER_TOKEN = previousToken;
+  });
+
+  it("keeps the stored card blob when attach succeeds", async () => {
+    const previousToken = process.env.SECURITY_SCAN_WORKER_TOKEN;
+    process.env.SECURITY_SCAN_WORKER_TOKEN = "test-worker-token";
+    const store = vi.fn(async () => "_storage:new-card");
+    const deleteStorage = vi.fn(async () => undefined);
+    const runMutation = vi.fn(async () => ({ ok: true, bundleFingerprint: "fp" }));
+
+    await expect(
+      completeHandler(
+        {
+          storage: { store, delete: deleteStorage },
+          runMutation,
+        },
+        {
+          token: "test-worker-token",
+          jobId: "skillCardGenerationJobs:1",
+          leaseToken: "lease",
+          markdown: "# Card\n",
+        },
+      ),
+    ).resolves.toEqual({ ok: true, bundleFingerprint: "fp" });
+
+    expect(deleteStorage).not.toHaveBeenCalled();
+    process.env.SECURITY_SCAN_WORKER_TOKEN = previousToken;
+  });
+
   it("replaces skill-card.md, preserves source and prior bundle fingerprints, and inserts current bundle fingerprint", async () => {
     const version = makeSettledVersion({
       files: [
