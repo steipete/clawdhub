@@ -1051,7 +1051,7 @@ describe("SkillsIndex", () => {
   });
 
   it.each(["new", "featured", "official"] as const)(
-    "keeps the %s first page retryable after a temporary fetch failure",
+    "surfaces a retryable failure on the %s first page after a temporary fetch failure",
     async (tab) => {
       searchMock = { tab };
       vi.stubGlobal("IntersectionObserver", undefined);
@@ -1069,20 +1069,109 @@ describe("SkillsIndex", () => {
         await act(async () => {});
 
         expect(screen.queryByText("No skills found")).toBeNull();
-        expect(screen.getByRole("button", { name: "Load more" })).toBeTruthy();
+        expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+        expect(screen.getByRole("alert").textContent).toContain("Skills couldn't be loaded");
 
         await act(async () => {
-          fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+          fireEvent.click(screen.getByRole("button", { name: "Try again" }));
         });
 
         expect(convexHttpMock.query).toHaveBeenCalledTimes(2);
+        expect(getLastListPageArgs().cursor ?? null).toBeNull();
         expect(screen.getByText("Recovered Skill")).toBeTruthy();
+        expect(screen.queryByRole("alert")).toBeNull();
         expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
       } finally {
         consoleErrorSpy.mockRestore();
       }
     },
   );
+
+  it("dispatches one first-page request when Try again is activated twice before it settles", async () => {
+    vi.stubGlobal("IntersectionObserver", undefined);
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      let settleRetry: (page: unknown) => void = () => {};
+      convexHttpMock.query
+        .mockRejectedValueOnce(new Error("temporary failure"))
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              settleRetry = resolve;
+            }),
+        )
+        .mockRejectedValue(new Error("duplicate retry dispatched"));
+
+      render(<SkillsIndex />);
+      await act(async () => {});
+
+      const retryButton = screen.getByRole("button", { name: "Try again" });
+      await act(async () => {
+        fireEvent.click(retryButton);
+        fireEvent.click(retryButton);
+      });
+
+      // Both activations land before React rerenders, so only the guard can keep the second
+      // one from starting a rival request that outlives the first.
+      expect(convexHttpMock.query).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        settleRetry({
+          page: [makeListResult("recovered-skill", "Recovered Skill")],
+          hasMore: false,
+          nextCursor: null,
+        });
+      });
+
+      expect(convexHttpMock.query).toHaveBeenCalledTimes(2);
+      expect(screen.getByText("Recovered Skill")).toBeTruthy();
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it("keeps the first-page failure state when the retry fails again", async () => {
+    vi.stubGlobal("IntersectionObserver", undefined);
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      convexHttpMock.query
+        .mockRejectedValueOnce(new Error("temporary failure"))
+        .mockRejectedValueOnce(new Error("still failing"));
+
+      render(<SkillsIndex />);
+      await act(async () => {});
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+      });
+
+      expect(convexHttpMock.query).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText("No skills found")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it("leaves canonical Trending on its own unavailable path", async () => {
+    searchMock = { tab: "trending" };
+    vi.stubGlobal("IntersectionObserver", undefined);
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      fetchCanonicalTrendingPageMock.mockRejectedValue(new Error("temporary failure"));
+
+      render(<SkillsIndex />);
+      await act(async () => {});
+
+      expect(screen.queryByText("Skills couldn't be loaded")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
 
   it("keeps loading across empty filtered pages without flashing terminal states", async () => {
     class IntersectionObserverMock {

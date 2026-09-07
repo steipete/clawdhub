@@ -411,6 +411,8 @@ export function SkillsIndex() {
             canAutoLoad={model.canAutoLoad}
             loadMoreRef={model.loadMoreRef}
             loadMore={model.loadMore}
+            listFailed={model.listFailed}
+            retryLoad={model.retryLoad}
             catalogTab={model.catalogTab}
             trendingState={model.trendingState}
           />

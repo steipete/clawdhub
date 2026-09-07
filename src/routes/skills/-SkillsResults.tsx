@@ -35,6 +35,8 @@ type SkillsResultsProps = {
   canAutoLoad: boolean;
   loadMoreRef: RefObject<HTMLDivElement | null>;
   loadMore: () => void;
+  listFailed: boolean;
+  retryLoad: () => void;
   catalogTab: SkillsCatalogTab;
   trendingState?: TrendingFeedState;
 };
@@ -221,6 +223,8 @@ export function SkillsResults({
   canAutoLoad,
   loadMoreRef,
   loadMore,
+  listFailed,
+  retryLoad,
   catalogTab,
   trendingState,
 }: SkillsResultsProps) {
@@ -232,6 +236,16 @@ export function SkillsResults({
     <>
       {isLoadingSkills ? (
         <BrowseResultsSkeleton label="Skill" showIcon={false} variant={effectiveView} />
+      ) : listFailed && sorted.length === 0 ? (
+        <div className="empty-state" role="alert">
+          <p className="empty-state-title">Skills couldn't be loaded</p>
+          <p className="empty-state-body">
+            We couldn't load this slice of the catalog. Give it another try in a moment.
+          </p>
+          <Button type="button" variant="outline" size="sm" className="mt-4" onClick={retryLoad}>
+            Try again
+          </Button>
+        </div>
       ) : sorted.length === 0 && listDoneLoading ? (
         <div className="empty-state">
           <p className="empty-state-title">
